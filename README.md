@@ -89,22 +89,40 @@ docker run -p 8787:8787 -v dura-data:/data -e DURA_SETUP_TOKEN=... -e DURA_ORIGI
 
 ### Cloudflare Workers + D1
 
+リポジトリの `wrangler.toml` の `database_id` はダミーの値です。自分の D1 の ID は、Git で管理しない `wrangler.local.toml` に書いて使います（`.gitignore` に登録済みです）。
+
+まず D1 データベースを作ります。
+
 ```bash
 npx wrangler d1 create dura
 ```
 
-表示された `database_id` を `wrangler.toml` に書き込んでから、次を実行します。
+`wrangler.toml` をコピーして `wrangler.local.toml` を作り、`database_id` を表示された ID に書き換えます。
 
 ```bash
-npm run worker:migrate
+cp wrangler.toml wrangler.local.toml
+```
+
+以降のコマンドには `-c wrangler.local.toml` を付けて実行します。npm スクリプトでは `--` のあとに渡します。
+
+```bash
+npm run worker:migrate -- -c wrangler.local.toml
 ```
 
 ```bash
-npx wrangler secret put DURA_SETUP_TOKEN
+npm run worker:deploy -- -c wrangler.local.toml
 ```
 
+最初のパスキーを登録する直前に、セットアップ用のトークンを設定します（再デプロイは不要です）。
+
 ```bash
-npm run worker:deploy
+npx wrangler secret put DURA_SETUP_TOKEN -c wrangler.local.toml
+```
+
+`https://dura.<アカウント名>.workers.dev/setup` を開いてパスキーを登録したら、トークンは削除して構いません。2 本目以降のパスキーは、ログインした状態で Settings から追加できます。
+
+```bash
+npx wrangler secret delete DURA_SETUP_TOKEN -c wrangler.local.toml
 ```
 
 ### 環境変数

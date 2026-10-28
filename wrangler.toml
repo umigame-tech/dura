@@ -6,7 +6,8 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "dura"
-# Replace with the id printed by `npx wrangler d1 create dura`.
+# Placeholder. Put your real id in wrangler.local.toml (git-ignored) and pass
+# `-c wrangler.local.toml` to wrangler; see README.
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "drizzle"
 

@@ -1,0 +1,359 @@
+import { and, asc, desc, eq, gt, inArray, max, sql } from "drizzle-orm";
+import type { DB } from "./db";
+import { journalEntries, sectionRevisions, sections, states, type StateStatus } from "./db/schema";
+import { ApiError, badRequest, isUniqueViolation, notFound } from "./lib/errors";
+import { ID_PATTERN, nowIso, SECTION_NAME_PATTERN, slugify } from "./lib/util";
+
+export type State = typeof states.$inferSelect;
+export type Section = typeof sections.$inferSelect;
+export type SectionRevision = typeof sectionRevisions.$inferSelect;
+export type JournalEntry = typeof journalEntries.$inferSelect;
+
+const STATUS_ORDER = sql`case ${states.status} when 'waiting' then 0 when 'active' then 1 when 'completed' then 2 else 3 end`;
+
+export async function listStates(db: DB, opts: { ids?: string[] | null; status?: StateStatus } = {}): Promise<State[]> {
+  const conds = [];
+  if (opts.ids) {
+    if (opts.ids.length === 0) return [];
+    conds.push(inArray(states.id, opts.ids));
+  }
+  if (opts.status) conds.push(eq(states.status, opts.status));
+  return db
+    .select()
+    .from(states)
+    .where(and(...conds))
+    .orderBy(STATUS_ORDER, desc(states.updatedAt));
+}
+
+export async function findState(db: DB, id: string): Promise<State | undefined> {
+  const [row] = await db.select().from(states).where(eq(states.id, id));
+  return row;
+}
+
+export async function getState(db: DB, id: string): Promise<State> {
+  const row = await findState(db, id);
+  if (!row) throw notFound(`State "${id}"`);
+  return row;
+}
+
+export function assertStatus(status: unknown): asserts status is StateStatus {
+  if (!["active", "waiting", "completed", "abandoned"].includes(status as string)) {
+    throw badRequest(`status must be one of active, waiting, completed, abandoned (got ${JSON.stringify(status)}).`);
+  }
+}
+
+export function assertSectionName(name: string) {
+  if (!SECTION_NAME_PATTERN.test(name)) {
+    throw badRequest(
+      `Invalid section name "${name}". Use lowercase letters, digits, "-", "_" or "." (max 64 chars), e.g. "goal", "plan", "tasks".`,
+    );
+  }
+}
+
+export async function createState(
+  db: DB,
+  input: { id?: string; title: string; status?: StateStatus; statusNote?: string | null; sections?: Record<string, string> },
+  actor: string,
+): Promise<State> {
+  const title = input.title?.trim();
+  if (!title) throw badRequest("title is required.");
+  if (input.status !== undefined) assertStatus(input.status);
+  for (const name of Object.keys(input.sections ?? {})) assertSectionName(name);
+
+  let id = input.id?.trim();
+  if (id) {
+    if (!ID_PATTERN.test(id)) {
+      throw badRequest(`Invalid id "${id}". Use lowercase letters, digits, "-" or "_" (max 64 chars).`);
+    }
+  } else {
+    id = await uniqueSlug(db, slugify(title) || "state");
+  }
+
+  const ts = nowIso();
+  try {
+    await db.insert(states).values({
+      id,
+      title,
+      status: input.status ?? "active",
+      statusNote: input.statusNote ?? null,
+      createdAt: ts,
+      updatedAt: ts,
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new ApiError(409, "already_exists", `State "${id}" already exists.`);
+    throw err;
+  }
+  for (const [name, content] of Object.entries(input.sections ?? {})) {
+    await putSection(db, id, name, content, 0, actor);
+  }
+  return getState(db, id);
+}
+
+async function uniqueSlug(db: DB, base: string): Promise<string> {
+  for (let i = 1; ; i++) {
+    const candidate = i === 1 ? base : `${base}-${i}`;
+    if (!(await findState(db, candidate))) return candidate;
+  }
+}
+
+export async function updateState(
+  db: DB,
+  id: string,
+  patch: { title?: string; status?: StateStatus; statusNote?: string | null },
+  actor: string,
+): Promise<{ state: State; previous: State }> {
+  const previous = await getState(db, id);
+  const values: Partial<State> = { updatedAt: nowIso() };
+  if (patch.title !== undefined) {
+    if (!patch.title.trim()) throw badRequest("title must not be empty.");
+    values.title = patch.title.trim();
+  }
+  if (patch.status !== undefined) {
+    assertStatus(patch.status);
+    values.status = patch.status;
+  }
+  if (patch.statusNote !== undefined) values.statusNote = patch.statusNote || null;
+  await db.update(states).set(values).where(eq(states.id, id));
+  const state = await getState(db, id);
+
+  if (state.status !== previous.status || (patch.statusNote !== undefined && state.statusNote !== previous.statusNote)) {
+    const head =
+      state.status !== previous.status
+        ? `Status changed from **${previous.status}** to **${state.status}**.`
+        : `Status note updated (status: **${state.status}**).`;
+    await appendJournal(db, id, actor, "status", state.statusNote ? `${head}\n\n${state.statusNote}` : head);
+  }
+  return { state, previous };
+}
+
+async function touchState(db: DB, id: string) {
+  await db.update(states).set({ updatedAt: nowIso() }).where(eq(states.id, id));
+}
+
+// ---------------------------------------------------------------------------
+// Sections
+
+export async function listSections(db: DB, stateId: string): Promise<Section[]> {
+  return db.select().from(sections).where(eq(sections.stateId, stateId)).orderBy(asc(sections.name));
+}
+
+export async function findSection(db: DB, stateId: string, name: string): Promise<Section | undefined> {
+  const [row] = await db
+    .select()
+    .from(sections)
+    .where(and(eq(sections.stateId, stateId), eq(sections.name, name)));
+  return row;
+}
+
+export async function getSection(db: DB, stateId: string, name: string): Promise<Section> {
+  await getState(db, stateId);
+  const row = await findSection(db, stateId, name);
+  if (!row) throw notFound(`Section "${name}" of state "${stateId}"`);
+  return row;
+}
+
+function conflict(stateId: string, name: string, sent: number, current: Section | undefined): ApiError {
+  const currentVersion = current?.version ?? 0;
+  const who = current ? ` (last written by ${current.updatedBy} at ${current.updatedAt})` : "";
+  return new ApiError(
+    409,
+    "version_conflict",
+    `You sent version ${sent}, but section "${name}" is now at version ${currentVersion}${who}. ` +
+      `Re-read it with GET /api/states/${stateId}/sections/${name}, ` +
+      `re-apply your change to the latest content, and retry with If-Match: ${currentVersion}.`,
+    { currentVersion, sentVersion: sent },
+  );
+}
+
+/**
+ * Writes the full content of a section.
+ * expectedVersion is the version the caller based its edit on (0 = section must not exist yet);
+ * null means the caller sent no If-Match, which is only allowed when creating.
+ */
+export async function putSection(
+  db: DB,
+  stateId: string,
+  name: string,
+  content: string,
+  expectedVersion: number | null,
+  actor: string,
+): Promise<Section> {
+  assertSectionName(name);
+  await getState(db, stateId);
+  const current = await findSection(db, stateId, name);
+  if (expectedVersion === null) {
+    if (current) {
+      throw new ApiError(
+        428,
+        "precondition_required",
+        `Section "${name}" already exists (version ${current.version}). Send If-Match: ${current.version} ` +
+          `with the version you based your edit on, so concurrent edits are not lost.`,
+        { currentVersion: current.version },
+      );
+    }
+    expectedVersion = 0;
+  }
+  if ((current?.version ?? 0) !== expectedVersion) throw conflict(stateId, name, expectedVersion, current);
+
+  const version = expectedVersion + 1;
+  const ts = nowIso();
+  try {
+    // Claiming the revision row is the lock: only one writer can create version N+1.
+    await db.insert(sectionRevisions).values({ stateId, name, version, content, updatedBy: actor, createdAt: ts });
+  } catch (err) {
+    if (isUniqueViolation(err)) throw conflict(stateId, name, expectedVersion, await findSection(db, stateId, name));
+    throw err;
+  }
+  await db
+    .insert(sections)
+    .values({ stateId, name, content, version, updatedBy: actor, updatedAt: ts })
+    .onConflictDoUpdate({
+      target: [sections.stateId, sections.name],
+      set: { content, version, updatedBy: actor, updatedAt: ts },
+    });
+  await touchState(db, stateId);
+  return (await findSection(db, stateId, name))!;
+}
+
+/** old/new partial replacement, the same model as the edit tools of coding agents. */
+export async function replaceInSection(
+  db: DB,
+  stateId: string,
+  name: string,
+  edit: { old: string; new: string; replaceAll?: boolean },
+  expectedVersion: number,
+  actor: string,
+): Promise<Section> {
+  if (typeof edit.old !== "string" || edit.old === "") throw badRequest("old must be a non-empty string.");
+  if (typeof edit.new !== "string") throw badRequest("new must be a string.");
+  if (edit.old === edit.new) throw badRequest("old and new are identical; nothing to change.");
+  const current = await getSection(db, stateId, name);
+  if (current.version !== expectedVersion) throw conflict(stateId, name, expectedVersion, current);
+
+  const count = current.content.split(edit.old).length - 1;
+  if (count === 0) {
+    throw new ApiError(
+      422,
+      "old_not_found",
+      `The old text was not found in section "${name}" (version ${current.version}). ` +
+        `Re-read the section and copy the text to replace exactly, including whitespace.`,
+    );
+  }
+  if (count > 1 && !edit.replaceAll) {
+    throw new ApiError(
+      422,
+      "old_not_unique",
+      `The old text occurs ${count} times in section "${name}". ` +
+        `Include more surrounding text to make it unique, or set replaceAll to replace every occurrence.`,
+      { occurrences: count },
+    );
+  }
+  const content = edit.replaceAll
+    ? current.content.split(edit.old).join(edit.new)
+    : current.content.replace(edit.old, () => edit.new);
+  return putSection(db, stateId, name, content, expectedVersion, actor);
+}
+
+export async function listRevisions(db: DB, stateId: string, name: string): Promise<SectionRevision[]> {
+  await getSection(db, stateId, name);
+  return db
+    .select()
+    .from(sectionRevisions)
+    .where(and(eq(sectionRevisions.stateId, stateId), eq(sectionRevisions.name, name)))
+    .orderBy(desc(sectionRevisions.version));
+}
+
+// ---------------------------------------------------------------------------
+// Journal
+
+export async function listJournal(
+  db: DB,
+  stateId: string,
+  opts: { after?: number; limit?: number } = {},
+): Promise<JournalEntry[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
+  return db
+    .select()
+    .from(journalEntries)
+    .where(and(eq(journalEntries.stateId, stateId), gt(journalEntries.seq, opts.after ?? 0)))
+    .orderBy(asc(journalEntries.seq))
+    .limit(limit);
+}
+
+/** The newest `limit` entries, in chronological order. */
+export async function tailJournal(db: DB, stateId: string, limit: number): Promise<JournalEntry[]> {
+  const rows = await db
+    .select()
+    .from(journalEntries)
+    .where(eq(journalEntries.stateId, stateId))
+    .orderBy(desc(journalEntries.seq))
+    .limit(limit);
+  return rows.reverse();
+}
+
+export async function lastJournalSeq(db: DB, stateId: string): Promise<number> {
+  const [row] = await db
+    .select({ seq: max(journalEntries.seq) })
+    .from(journalEntries)
+    .where(eq(journalEntries.stateId, stateId));
+  return row?.seq ?? 0;
+}
+
+/** Append-only, so concurrent writers never conflict; seq is assigned by the server. */
+export async function appendJournal(
+  db: DB,
+  stateId: string,
+  actor: string,
+  kind: string,
+  body: string,
+): Promise<JournalEntry> {
+  kind = kind.trim() || "note";
+  if (!/^[a-z0-9][a-z0-9_.-]{0,31}$/.test(kind)) {
+    throw badRequest(`Invalid kind "${kind}". Use a short lowercase word such as report, decision or note.`);
+  }
+  if (!body.trim()) throw badRequest("body must not be empty.");
+  await getState(db, stateId);
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const seq = (await lastJournalSeq(db, stateId)) + 1;
+    const entry = { stateId, seq, actor, kind, body, createdAt: nowIso() };
+    try {
+      await db.insert(journalEntries).values(entry);
+      await touchState(db, stateId);
+      return entry;
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      // Another writer took this seq; try the next one.
+    }
+  }
+  throw new ApiError(503, "busy", "Could not append to the journal because of heavy concurrent writes. Please retry.");
+}
+
+// ---------------------------------------------------------------------------
+// Markdown export: everything an agent needs to resume work, in one document.
+
+export function renderStateMarkdown(state: State, secs: Section[], journal: JournalEntry[], after: number): string {
+  const lines: string[] = [];
+  lines.push(`# ${state.title}`, "");
+  lines.push(`- id: ${state.id}`);
+  lines.push(`- status: ${state.status}`);
+  lines.push(`- updated: ${state.updatedAt}`);
+  if (state.statusNote) lines.push("", "## Status note", "", state.statusNote.trim());
+  lines.push("");
+  if (secs.length === 0) {
+    lines.push("_No sections yet._", "");
+  }
+  for (const s of secs) {
+    lines.push(`## Section: ${s.name}`, "");
+    lines.push(`<!-- version: ${s.version}, updated by ${s.updatedBy} at ${s.updatedAt} -->`, "");
+    lines.push(s.content.trim() || "_(empty)_", "");
+  }
+  lines.push(after > 0 ? `## Journal (after #${after})` : "## Journal", "");
+  if (journal.length === 0) lines.push("_No entries._", "");
+  for (const e of journal) {
+    lines.push(`### #${e.seq} ${e.kind} by ${e.actor} at ${e.createdAt}`, "");
+    lines.push(e.body.trim(), "");
+  }
+  const last = journal.at(-1)?.seq ?? after;
+  lines.push("---", "", `Last journal seq: ${last}. Next time, read only newer entries with after=${last}.`, "");
+  return lines.join("\n");
+}

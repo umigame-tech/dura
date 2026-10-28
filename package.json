@@ -15,7 +15,7 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "worker:dev": "wrangler dev",
-    "worker:deploy": "wrangler deploy",
+    "worker:deploy": "wrangler d1 migrations apply dura --remote && wrangler deploy",
     "worker:migrate": "wrangler d1 migrations apply dura --remote"
   },
   "dependencies": {

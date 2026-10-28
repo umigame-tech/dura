@@ -3,6 +3,5 @@ dist/
 data/
 .wrangler/
 .dev.vars
-wrangler.local.toml
 *.db
 *.db-*

@@ -39,10 +39,10 @@ GET     /api/guide                                    エージェント向け�
 - `replace` は Claude Code や Codex の編集ツールと同じ old/new 方式です。`old` が 1 回だけ現れることを要求し、すべて置換したいときは `replaceAll: true` を付けます。
 - セクションや本文は `Content-Type: text/markdown` の生の本文でも、JSON でも送れます。
 
-エージェントには `GET /api/guide` を読ませれば使い方が伝わります。たとえば `~/.claude/CLAUDE.md` や `~/.codex/AGENTS.md` に次のように書いておく運用を想定しています。
+CLI を利用できるエージェントには `dura guide`（`GET /api/guide`）を読ませれば使い方が伝わります。たとえば `~/.claude/CLAUDE.md` や `~/.codex/AGENTS.md` に次のように書いておく運用を想定しています。
 
 ```
-作業状態は dura で管理する。最初に $DURA_URL/api/guide を読むこと。
+作業状態は dura CLI で管理する。最初に `dura guide`、次に `dura show --limit 1000` を実行する。
 ```
 
 ## CLI

@@ -16,7 +16,16 @@ You receive these from your prompt or environment:
 - \`DURA_TOKEN\` - your bearer token. Its name is recorded as the author of everything you write.
 - \`DURA_STATE\` - the id of the state you work on
 
-Send \`Authorization: Bearer $DURA_TOKEN\` with every request.
+The examples below use the \`dura\` CLI, which sends the bearer token for you.
+Keep the token in the environment; never print it or put it in source control.
+State commands use \`DURA_STATE\`; pass \`--state <id>\` to select another state.
+If a required variable is missing, ask for configuration rather than guessing a state.
+
+Read this guide with \`dura guide\`. For a locally built CLI, use
+\`node cli/dist/dura.js\` in place of \`dura\` (build with \`npm run cli:build\`).
+A one-line instruction in your agent configuration can be:
+
+    Manage work state with dura. Start by running dura guide, then dura show --limit 1000.
 
 ## Model
 
@@ -36,49 +45,61 @@ Changing it to \`waiting\` or \`completed\` notifies the human.
 
 Everything you need to resume, as one Markdown document:
 
-    curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
-      "$DURA_URL/api/states/$DURA_STATE?after=0"
+    dura show --limit 1000
 
-\`after=<seq>\` limits the journal to entries newer than one you have already read.
-The document ends with the last journal seq; pass it next time.
+Read the goal, plan, tasks and journal before choosing work. If status is
+\`waiting\`, read the status note and obtain the human's decision before resuming.
 
-One section (raw Markdown; its version is in the \`ETag\` header):
+\`--after <seq>\` limits the journal to entries newer than one you have already read.
+The document ends with the last journal seq; pass it next time:
 
-    curl -sS -i -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
-      "$DURA_URL/api/states/$DURA_STATE/sections/plan"
+    dura show --after 41 --limit 1000
+    dura journal --after 41 --limit 1000
 
-New journal entries only:
+Journal entries are returned oldest first, with a default limit of 200 and a
+maximum of 1000 per request. If a page contains as many entries as the limit,
+continue with its last seq until a page contains fewer entries. Keep the last
+seq you read so you can resume without skipping entries.
 
-    curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
-      "$DURA_URL/api/states/$DURA_STATE/journal?after=41"
+One section (raw Markdown on stdout; its version on stderr):
+
+    dura section get plan
+    dura section get plan --json
+
+\`show\`, \`list\`, \`journal\` and \`section get\` support \`--json\` for structured
+output. \`guide\` is Markdown only. List accessible states with \`dura list\`.
 
 ## Writing
 
-Report your work (sub-agents should do this when they finish):
+Report your work at each milestone (sub-agents should do this when they finish):
 
-    curl -sS -X POST -H "Authorization: Bearer $DURA_TOKEN" -H "Content-Type: text/markdown" \\
-      --data-binary @report.md "$DURA_URL/api/states/$DURA_STATE/journal?kind=report"
+    dura log --kind report < report.md
+
+Include what changed, the result, relevant links and the next step.
 
 Edit part of a section: prefer this over rewriting the whole section, so nothing gets dropped.
-\`old\` must match exactly once (or set \`"replaceAll": true\`). \`If-Match\` is the version you read.
+Read the section first and use the version reported by \`section get\` (or the version
+comment in \`show\`). The example assumes you read version 7:
 
-    curl -sS -X POST -H "Authorization: Bearer $DURA_TOKEN" -H "Content-Type: application/json" \\
-      -H "If-Match: 7" -d '{"old": "- [ ] write tests", "new": "- [x] write tests"}' \\
-      "$DURA_URL/api/states/$DURA_STATE/sections/tasks/replace"
+    dura section get tasks
+    dura section replace tasks --version 7 --old "- [ ] write tests" --new "- [x] write tests"
 
-Replace a whole section (omit \`If-Match\` only when creating a new section):
+\`--old\` must match exactly once; use \`--all\` only when you intend to replace every
+occurrence. The CLI sends \`--version\` as the HTTP \`If-Match\` header.
 
-    curl -sS -X PUT -H "Authorization: Bearer $DURA_TOKEN" -H "Content-Type: text/markdown" \\
-      -H "If-Match: 7" --data-binary @plan.md "$DURA_URL/api/states/$DURA_STATE/sections/plan"
+Replace a whole section (omit \`--version\` only when creating a new section):
 
-Change the status. Use \`waiting\` when you need a human decision and put the question in \`statusNote\`;
-use \`completed\` with a short summary when the goal's done-criteria are met:
+    dura section put plan --version 7 < plan.md
 
-    curl -sS -X PATCH -H "Authorization: Bearer $DURA_TOKEN" -H "Content-Type: application/json" \\
-      -d '{"status": "waiting", "statusNote": "Should the API keep v1 compatibility?"}' \\
-      "$DURA_URL/api/states/$DURA_STATE"
+Change the status. Use \`waiting\` when you need a human decision and put the question
+in \`--note\`; use \`completed\` with a short summary when all goal criteria are met:
 
-Create a new state (only with a token that is not limited to specific states):
+    dura status waiting --note "Should the API keep v1 compatibility?"
+    dura status active --note "Resuming after the human decision."
+    dura status completed --note "All goal criteria are met."
+
+The CLI does not create states. If the state does not exist, confirm its title and
+goal with the human, then use the REST API below (with a token permitted to create states):
 
     curl -sS -X POST -H "Authorization: Bearer $DURA_TOKEN" -H "Content-Type: application/json" \\
       -d '{"id": "search-rewrite", "title": "Rewrite search", "sections": {"goal": "..."}}' \\
@@ -87,23 +108,31 @@ Create a new state (only with a token that is not limited to specific states):
 ## When a write is rejected
 
 - \`409 version_conflict\`: someone changed the section after you read it. Read it again,
-  re-apply your change to the new content, and retry with the new version.
+  re-apply your change to the new content, and retry with \`--version <new version>\`.
 - \`422 old_not_found\` / \`old_not_unique\`: copy the text to replace exactly from a fresh read,
   with enough context to be unique.
-- \`428 precondition_required\`: the section exists; send \`If-Match\`.
+- \`428 precondition_required\`: the section exists; read it and pass \`--version\`.
 
-Error responses are JSON: \`{"error": {"code": "...", "message": "..."}}\`. The message says what to do next.
+For a section error, run \`dura section get <name>\` to read the current content
+and version before retrying. The CLI prints a next-step hint when a request fails.
+\`401 unauthorized\` means the token is missing, invalid or revoked;
+\`403 forbidden\` means it lacks permission for the operation or state.
+
+REST error responses are JSON: \`{"error": {"code": "...", "message": "..."}}\`. The message says what to do next.
 
 ## Suggested loop
 
-1. Orchestrator: read the state (sections + unread journal).
+1. Orchestrator: run \`dura show\` (sections + unread journal).
 2. Pick the next task and hand it to a sub-agent together with \`DURA_STATE\`.
-3. Sub-agent: do the work, then append a \`report\` to the journal.
+3. Sub-agent: do the work, then append a report with \`dura log --kind report\`.
 4. Orchestrator: read new reports, update \`tasks\` / \`design\` with targeted replacements, repeat.
 5. When the done-criteria in \`goal\` are met, set status \`completed\` with a summary.
    If you are blocked on a human decision, set \`waiting\` with the question and stop.
 
 ## API reference
+
+The CLI is a client of this REST API. Direct HTTP requests use
+\`Authorization: Bearer $DURA_TOKEN\`. The guide endpoint is public.
 
     GET    /api/states                                   list states (?status=)
     POST   /api/states                                   create {id?, title, status?, statusNote?, sections?}

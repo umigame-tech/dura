@@ -16,5 +16,5 @@
     "jsxImportSource": "hono/jsx",
     "noEmit": true
   },
-  "include": ["src", "test", "drizzle.config.ts", "vitest.config.ts"]
+  "include": ["src", "cli/src", "test", "drizzle.config.ts", "vitest.config.ts"]
 }

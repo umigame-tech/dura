@@ -1,7 +1,7 @@
 # dura
 
 AI エージェントのループ（オーケストレーターとサブエージェント）が共有する「作業状態」を、セッションの外に置いておくためのサーバーです。
-REST API を正本とし、Web UI はその上に載る公式クライアントです（CLI は今後追加予定です）。
+REST API を正本とし、Web UI と CLI はその上に載る公式クライアントです。
 
 ## 考え方
 
@@ -44,6 +44,34 @@ GET     /api/guide                                    エージェント向け�
 ```
 作業状態は dura で管理する。最初に $DURA_URL/api/guide を読むこと。
 ```
+
+## CLI
+
+`cli/` に依存パッケージのない CLI があります（npm での配布は準備中です）。今はリポジトリでビルドして使います。
+
+```bash
+npm run cli:build
+```
+
+```bash
+export DURA_URL=https://dura.example.com DURA_STATE=search-rewrite
+```
+
+`DURA_TOKEN` は環境変数からだけ読みます（シェルの履歴に残さないため、フラグでは渡せません）。State は `--state <id>` で指定でき、省略すると `DURA_STATE` を使います。
+
+```
+dura show                                   全セクションとジャーナル（Markdown、--json で JSON）
+dura list                                   読める State の一覧
+dura section get tasks                      本文を stdout に、version を stderr に出します
+dura section put plan --version 3 < plan.md 全文の書き込み（新規作成のときは --version を省きます）
+dura section replace tasks --version 7 --old "- [ ] CI" --new "- [x] CI"
+dura log --kind report "CI を追加した"       ジャーナルに追記（本文は引数、stdin、--file のどれか）
+dura journal --after 41                     指定した seq より後のジャーナル
+dura status waiting --note "名前はどちらにしますか？"
+dura guide                                  /api/guide を表示
+```
+
+書き込みが拒否されたときは、サーバーのエラーに加えて、CLI で次に何をすればよいか（`dura section get tasks` で読み直して `--version 8` で再送する、など）を表示します。
 
 ## 認証
 
@@ -166,5 +194,6 @@ src/
   routes/api.ts     REST API
   routes/webauthn.ts パスキーの登録とログイン
   ui/               Hono JSX によるサーバーレンダリングの Web UI
+cli/src/            dura CLI（cli.ts が本体、main.ts が Node のエントリポイント）
 drizzle/            SQL マイグレーション（Node と D1 で共用）
 ```

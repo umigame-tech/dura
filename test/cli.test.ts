@@ -107,5 +107,6 @@ describe("cli", () => {
     expect((await exec([])).code).toBe(2);
     expect((await exec(["frobnicate"])).stderr).toContain("Unknown command");
     expect((await exec(["guide"])).stdout).toContain("# dura");
+    expect((await exec(["guide", "--json"])).stderr).toContain("only available as Markdown");
   });
 });

@@ -239,6 +239,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
         return 0;
       }
       case "guide": {
+        if (opts.json) throw new CliError("guide is only available as Markdown; drop --json.");
         print((await client.request("GET", "/guide")).text);
         return 0;
       }

@@ -1,0 +1,16 @@
+{
+  "name": "dura-cli",
+  "version": "0.1.0",
+  "description": "Command-line client for dura, the shared state server for AI agent loops.",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "dura": "dist/dura.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

@@ -1,0 +1,111 @@
+import { describe, expect, it } from "vitest";
+import { run, type Io } from "../cli/src/cli";
+import { setup } from "./helpers";
+
+async function cli() {
+  const ctx = await setup();
+  const token = await ctx.tokenFor("cli-agent");
+  await ctx.call(token, "POST", "/api/states", { id: "s", title: "S", sections: { tasks: "- [ ] a\n- [ ] b\n" } });
+
+  const exec = async (argv: string[], opts: { stdin?: string; env?: Record<string, string | undefined> } = {}) => {
+    let stdout = "";
+    let stderr = "";
+    const io: Io = {
+      env: { DURA_URL: "http://localhost/", DURA_TOKEN: token, DURA_STATE: "s", ...opts.env },
+      fetch: (url, init) => ctx.app.request(url, init) as unknown as Promise<Response>,
+      readStdin: async () => opts.stdin ?? "",
+      readFile: async (path) => `file:${path}`,
+      stdout: (t) => (stdout += t),
+      stderr: (t) => (stderr += t),
+    };
+    const code = await run(argv, io);
+    return { code, stdout, stderr };
+  };
+  return { ...ctx, token, exec };
+}
+
+describe("cli", () => {
+  it("requires DURA_URL and DURA_TOKEN, and a state", async () => {
+    const { exec } = await cli();
+    const missing = await exec(["show"], { env: { DURA_URL: undefined, DURA_TOKEN: undefined } });
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toContain("DURA_URL and DURA_TOKEN must be set");
+
+    const noState = await exec(["show"], { env: { DURA_STATE: undefined } });
+    expect(noState.code).toBe(2);
+    expect(noState.stderr).toContain("--state");
+  });
+
+  it("shows a state as Markdown, or JSON with --json", async () => {
+    const { exec } = await cli();
+    const md = await exec(["show"]);
+    expect(md.code).toBe(0);
+    expect(md.stdout).toContain("## Section: tasks");
+
+    const json = await exec(["show", "--state", "s", "--json"]);
+    expect(JSON.parse(json.stdout).state.id).toBe("s");
+
+    const unknown = await exec(["show", "-s", "nope"]);
+    expect(unknown.code).toBe(1);
+    expect(unknown.stderr).toContain("not_found");
+    expect(unknown.stderr).toContain("dura list");
+  });
+
+  it("gets, puts and replaces sections with versions", async () => {
+    const { exec } = await cli();
+    const got = await exec(["section", "get", "tasks"]);
+    expect(got.stdout).toBe("- [ ] a\n- [ ] b\n");
+    expect(got.stderr).toBe("version: 1\n");
+    expect((await exec(["section", "get", "nope"])).stderr).toContain("`dura show` lists the sections");
+
+    const replaced = await exec(["section", "replace", "tasks", "--version", "1", "--old", "- [ ] a", "--new", "- [x] a"]);
+    expect(replaced.code).toBe(0);
+    expect(replaced.stderr).toBe("Wrote section tasks (version 2).\n");
+
+    const stale = await exec(["section", "replace", "tasks", "--version", "1", "--old", "- [ ] b", "--new", "- [x] b"]);
+    expect(stale.code).toBe(1);
+    expect(stale.stderr).toContain("version_conflict");
+    expect(stale.stderr).toContain("Next: Run `dura section get tasks`");
+    expect(stale.stderr).toContain("--version 2");
+
+    const noVersion = await exec(["section", "put", "tasks"], { stdin: "x" });
+    expect(noVersion.stderr).toContain("pass --version 2");
+
+    expect((await exec(["section", "put", "plan"], { stdin: "# Plan\n" })).code).toBe(0);
+    const put = await exec(["section", "put", "tasks", "--version", "2", "--file", "t.md"]);
+    expect(put.stderr).toBe("Wrote section tasks (version 3).\n");
+    expect((await exec(["section", "get", "tasks"])).stdout).toBe("file:t.md");
+  });
+
+  it("appends to and reads the journal", async () => {
+    const { exec } = await cli();
+    const logged = await exec(["log", "--kind", "report", "did", "the", "thing"]);
+    expect(logged.stderr).toBe("Appended report #1.\n");
+    await exec(["log"], { stdin: "from stdin\n" });
+
+    const journal = await exec(["journal", "--after", "1"]);
+    expect(journal.stdout).toContain("#2 note by cli-agent");
+    expect(journal.stdout).not.toContain("did the thing");
+
+    const empty = await exec(["log"], { stdin: "  \n" });
+    expect(empty.code).toBe(2);
+  });
+
+  it("changes the status", async () => {
+    const { exec } = await cli();
+    const res = await exec(["status", "waiting", "--note", "Which name?"]);
+    expect(res.code).toBe(0);
+    const state = JSON.parse((await exec(["show", "--json"])).stdout).state;
+    expect(state).toMatchObject({ status: "waiting", statusNote: "Which name?" });
+
+    expect((await exec(["status", "done"])).code).toBe(2);
+  });
+
+  it("prints usage and the guide", async () => {
+    const { exec } = await cli();
+    expect((await exec(["--help"])).stdout).toContain("Usage: dura");
+    expect((await exec([])).code).toBe(2);
+    expect((await exec(["frobnicate"])).stderr).toContain("Unknown command");
+    expect((await exec(["guide"])).stdout).toContain("# dura");
+  });
+});

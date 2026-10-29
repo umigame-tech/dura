@@ -16,7 +16,8 @@
     "db:generate": "drizzle-kit generate",
     "worker:dev": "wrangler dev",
     "worker:deploy": "wrangler d1 migrations apply dura --remote && wrangler deploy",
-    "worker:migrate": "wrangler d1 migrations apply dura --remote"
+    "worker:migrate": "wrangler d1 migrations apply dura --remote",
+    "cli:build": "esbuild cli/src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=cli/dist/dura.js --banner:js=\"#!/usr/bin/env node\""
   },
   "dependencies": {
     "@hono/node-server": "^1.19.5",

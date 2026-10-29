@@ -47,7 +47,7 @@ GET     /api/guide                                    エージェント向け�
 
 ## CLI
 
-`cli/` に依存パッケージのない CLI があり、npm で `@umigame-tech/dura` として配布します（Node 20 以上）。コマンド名は `dura` です。
+`cli/` に依存パッケージのない CLI があり、npm で [`@umigame-tech/dura`](https://www.npmjs.com/package/@umigame-tech/dura) として配布しています（Node 20 以上）。コマンド名は `dura` です。
 
 ```bash
 npm install -g @umigame-tech/dura
@@ -67,7 +67,7 @@ npm run cli:compile
 
 別のプラットフォーム向けには `bun build cli/src/main.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-darwin-arm64 --outfile dura` のように `--target` を指定します。`--no-compile-autoload-*` は、実行したディレクトリの `.env` や `bunfig.toml` をバイナリが読み込まないようにするためのものです（作業中のリポジトリのファイルでトークンや接続先が変わったり、コードが実行されたりするのを防ぎます）。
 
-`cli:build` のビルド後は、任意のディレクトリから `node /absolute/path/to/dura/cli/dist/dura.js guide` のように絶対パスで実行できます。以下の例のように `dura` を PATH から実行するには、dura リポジトリで `npm link ./cli` を実行します。
+`cli:build` のビルド後は、任意のディレクトリから `node /absolute/path/to/dura/cli/dist/dura.js guide` のように絶対パスで実行できます。ビルドしたものを `dura` として PATH から実行するには、dura リポジトリで `npm link ./cli` を実行します。
 
 ```bash
 export DURA_URL=https://dura.example.com DURA_STATE=search-rewrite
@@ -100,13 +100,10 @@ git switch main && git pull
 ```
 
 ```bash
-git tag cli-v0.1.0 && git push origin cli-v0.1.0
+git tag cli-v0.1.1 && git push origin cli-v0.1.1
 ```
 
-npm への認証は次のどちらかです。
-
-- リポジトリのシークレット `NPM_TOKEN`（npm の Granular Access Token。初回の公開はこちらが必要です）
-- npm の Trusted Publishing。パッケージの設定で、GitHub Actions の `umigame-tech/dura` と `publish-cli.yml` を登録します。登録後は `NPM_TOKEN` を削除できます。
+npm への認証には Trusted Publishing を使います。npm のパッケージ設定で、Trusted Publisher として GitHub Actions の `umigame-tech/dura` と `publish-cli.yml` を登録しておきます。トークンは不要で、provenance 付きで公開されます。
 
 ## 認証
 

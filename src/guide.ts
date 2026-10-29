@@ -26,9 +26,13 @@ The CLI currently requires both \`DURA_URL\` and \`DURA_TOKEN\`, including for
 
     curl -fsS "$DURA_URL/api/guide"
 
-For a locally built CLI, run \`npm run cli:build\` in the dura repository, then use
-\`node /absolute/path/to/dura/cli/dist/dura.js\` in place of \`dura\` from any directory.
-Alternatively, run \`npm link ./cli\` there to make \`dura\` available on PATH.
+Install the CLI from npm (Node 20 or later):
+
+    npm install -g @umigame-tech/dura
+
+To use a locally built CLI instead, run \`npm run cli:build\` in the dura repository, then use
+\`node /absolute/path/to/dura/cli/dist/dura.js\` in place of \`dura\` from any directory,
+or run \`npm link ./cli\` there to make \`dura\` available on PATH.
 A one-line instruction in your agent configuration can be:
 
     Manage work state with dura. First read $DURA_URL/api/guide, then follow its Reading procedure through every journal page before choosing work.

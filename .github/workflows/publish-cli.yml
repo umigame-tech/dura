@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm trusted publishing and provenance
+  id-token: write # npm trusted publishing (no token) and provenance
 
 jobs:
   publish:
@@ -34,6 +34,3 @@ jobs:
           test "$(node cli/dist/dura.js -V)" = "$version"
       - run: npm publish
         working-directory: cli
-        env:
-          # Unset once trusted publishing is configured on npmjs.com.
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

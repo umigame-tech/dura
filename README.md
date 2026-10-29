@@ -113,7 +113,7 @@ npm stage list @umigame-tech/dura
 npm stage approve <stage-id>
 ```
 
-npm への認証には Trusted Publishing を使います。npm のパッケージ設定で、Trusted Publisher として GitHub Actions の `umigame-tech/dura` と `publish-cli.yml` を登録しておきます。トークンは不要で、provenance 付きでステージングされます。Allowed actions の `npm publish` は許可しないでください（ステージングだけで足ります）。
+npm への認証には Trusted Publishing を使います。npm のパッケージ設定で、Trusted Publisher として GitHub Actions の `umigame-tech/dura` と `publish-cli.yml` を登録しておきます。トークンは不要です。provenance は、リポジトリが public のときだけ npm が自動で付けます（private リポジトリからは付けられません）。Allowed actions の `npm publish` は許可しないでください（ステージングだけで足ります）。
 
 ## 認証
 

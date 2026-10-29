@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write # npm trusted publishing (no token) and provenance
+  id-token: write # npm trusted publishing (no token), and provenance when the repository is public
 
 jobs:
   publish:

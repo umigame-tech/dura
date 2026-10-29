@@ -1,0 +1,39 @@
+name: Publish CLI
+
+# Push a tag such as cli-v0.1.0 to publish cli/ to npm as @umigame-tech/dura.
+on:
+  push:
+    tags: ["cli-v*"]
+
+permissions:
+  contents: read
+  id-token: write # npm trusted publishing and provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check that the tag is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "Tag $GITHUB_REF_NAME is not on main"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run cli:build
+      - name: Check that the tag matches the package version
+        run: |
+          version=$(node -p "require('./cli/package.json').version")
+          test "$GITHUB_REF_NAME" = "cli-v$version" || { echo "Tag $GITHUB_REF_NAME does not match cli/package.json version $version"; exit 1; }
+          test "$(node cli/dist/dura.js -V)" = "$version"
+      - run: npm publish
+        working-directory: cli
+        env:
+          # Unset once trusted publishing is configured on npmjs.com.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

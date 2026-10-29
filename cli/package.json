@@ -1,16 +1,33 @@
 {
-  "name": "dura-cli",
+  "name": "@umigame-tech/dura",
   "version": "0.1.0",
   "description": "Command-line client for dura, the shared state server for AI agent loops.",
+  "license": "MIT",
   "type": "module",
-  "private": true,
   "bin": {
     "dura": "dist/dura.js"
   },
   "files": [
-    "dist"
+    "dist/dura.js"
   ],
   "engines": {
     "node": ">=20"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "cli",
+    "state"
+  ],
+  "homepage": "https://github.com/umigame-tech/dura#readme",
+  "bugs": "https://github.com/umigame-tech/dura/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/umigame-tech/dura.git",
+    "directory": "cli"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

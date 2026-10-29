@@ -93,7 +93,7 @@ dura guide                                  /api/guide を表示
 
 ### CLI の公開
 
-`cli/package.json` の `version` を上げてマージした後、main のコミットに `cli-v<version>` のタグを付けて push すると、GitHub Actions（`.github/workflows/publish-cli.yml`）が typecheck・test・ビルドを行い、npm に公開します。main に含まれないコミットのタグでは公開しません。CLI の `dura -V` も `cli/package.json` の `version` を表示します。
+`cli/package.json` の `version` を上げてマージした後、main のコミットに `cli-v<version>` のタグを付けて push すると、GitHub Actions（`.github/workflows/publish-cli.yml`）が typecheck・test・ビルドを行い、npm にステージング公開（`npm stage publish`）します。main に含まれないコミットのタグでは公開しません。CLI の `dura -V` も `cli/package.json` の `version` を表示します。
 
 ```bash
 git switch main && git pull
@@ -103,7 +103,17 @@ git switch main && git pull
 git tag cli-v0.1.1 && git push origin cli-v0.1.1
 ```
 
-npm への認証には Trusted Publishing を使います。npm のパッケージ設定で、Trusted Publisher として GitHub Actions の `umigame-tech/dura` と `publish-cli.yml` を登録しておきます。トークンは不要で、provenance 付きで公開されます。
+ステージングされたバージョンは、メンテナーが 2FA で承認するまで公開されません。npm 11.15 以上で、ステージングの ID を確かめてから承認します。
+
+```bash
+npm stage list @umigame-tech/dura
+```
+
+```bash
+npm stage approve <stage-id>
+```
+
+npm への認証には Trusted Publishing を使います。npm のパッケージ設定で、Trusted Publisher として GitHub Actions の `umigame-tech/dura` と `publish-cli.yml` を登録しておきます。トークンは不要で、provenance 付きでステージングされます。Allowed actions の `npm publish` は許可しないでください（ステージングだけで足ります）。
 
 ## 認証
 

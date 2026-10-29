@@ -89,22 +89,42 @@ docker run -p 8787:8787 -v dura-data:/data -e DURA_SETUP_TOKEN=... -e DURA_ORIGI
 
 ### Cloudflare Workers + D1
 
+`wrangler.toml` には D1 の `database_id` を書かず、`database_name = "dura"` で名前から探す設定にしています。ID をリポジトリに載せる必要はありません。
+
+まず D1 データベースを作ります（表示される ID を控える必要はありません）。
+
 ```bash
 npx wrangler d1 create dura
 ```
 
-表示された `database_id` を `wrangler.toml` に書き込んでから、次を実行します。
+`npm run worker:deploy` は、マイグレーションを適用してからデプロイします。
 
 ```bash
-npm run worker:migrate
+npm run worker:deploy
 ```
+
+#### Workers Builds（GitHub 連携）でデプロイする場合
+
+Cloudflare のダッシュボードでこのリポジトリを Worker に接続し、ビルド設定のデプロイコマンドを次のようにすると、push のたびにマイグレーションの適用とデプロイが行われます。
+
+```bash
+npm run worker:deploy
+```
+
+本番以外のブランチ（PR など）のビルドは無効にしてください。Workers Builds は本番以外のブランチで `wrangler preview` を実行しますが、プレビューは本番の D1 バインディングを引き継がないため、この設定のままでは失敗します。
+
+#### 最初のパスキー登録
+
+登録する直前に、セットアップ用のトークンを設定します（再デプロイは不要です）。
 
 ```bash
 npx wrangler secret put DURA_SETUP_TOKEN
 ```
 
+`https://dura.<アカウント名>.workers.dev/setup` を開いてパスキーを登録したら、トークンは削除して構いません。2 本目以降のパスキーは、ログインした状態で Settings から追加できます。
+
 ```bash
-npm run worker:deploy
+npx wrangler secret delete DURA_SETUP_TOKEN
 ```
 
 ### 環境変数

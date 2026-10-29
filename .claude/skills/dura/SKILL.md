@@ -22,7 +22,7 @@ echo "URL=${DURA_URL:-unset} TOKEN=${DURA_TOKEN:+set} STATE=${DURA_STATE:-dura}"
 ```
 
 - `DURA_URL` / `DURA_TOKEN` がない: 環境変数はセッション開始時に読み込まれる。ユーザーに、クラウド環境の設定で環境変数を登録して新しいセッションを始めるよう伝える。トークンをチャットに貼ってもらってはいけない。
-- 接続が `403` / `CONNECT tunnel failed` で拒否される: 環境のネットワーク設定で `dura.umigame.app` が許可されていない。Allowed domains に追加してもらう。
+- curl が `CONNECT tunnel failed, response 403`（終了コード 56、JSON の本文なし）で失敗する: dura ではなく環境のプロキシが接続を拒否している。環境のネットワーク設定で `dura.umigame.app` を Allowed domains に追加してもらう。dura 自身が返す `403`（JSON で `"code": "forbidden"`）はトークンの権限不足なので、下の「エラーへの対処」を見る。
 
 以降の例では次の変数を使います。
 
@@ -38,17 +38,27 @@ S="${DURA_STATE:-dura}"; AUTH="Authorization: Bearer $DURA_TOKEN"
    curl -sS "$DURA_URL/api/guide"
    ```
 
-2. State を丸ごと読む。全セクションとジャーナルが 1 つの Markdown で返る。末尾の `Last journal seq: N` を覚えておく。
+2. State を読む。全セクションとジャーナルが 1 つの Markdown で返る。末尾の `Last journal seq: N` を覚えておく。
 
    ```bash
-   curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S"
+   curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S?limit=1000"
+   ```
+
+   ジャーナルは `after` より後の古い順に、1 回で最大 `limit` 件（既定 200、上限 1000）しか返らない。
+   返ってきた件数が `limit` と同じなら続きがあるので、`Last journal seq` を `after` に渡して、件数が `limit` 未満になるまで読み進める。
+   古い記録まですべて読む必要はない。直近のものを優先して把握する。
+
+   ```bash
+   N=1000  # 直前に読んだ Last journal seq
+   curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S/journal?after=$N&limit=1000"
    ```
 
    `404` なら State がまだない。ユーザーに確認したうえで、このスキルと同じディレクトリの `initial-state.json` から作る。
+   ID は `$S` に置き換えて送る（ファイルの `id` は `dura` 固定のため）。
 
    ```bash
-   curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" \
-     --data-binary @.claude/skills/dura/initial-state.json "$DURA_URL/api/states"
+   jq --arg id "$S" '.id = $id' .claude/skills/dura/initial-state.json |
+     curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" --data-binary @- "$DURA_URL/api/states"
    ```
 
 3. `goal`（完了条件）、`plan`、`tasks`、未読のジャーナルを踏まえて、次にやることを決める。
@@ -122,7 +132,7 @@ curl -sS -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
 - `409 version_conflict`: 読んだ後に誰かが更新した。読み直し、最新の内容に変更を適用し直して、新しい version で再送する。
 - `422 old_not_found` / `old_not_unique`: 読み直して、置換したい文字列を正確に、一意になるだけの前後を含めてコピーする。
 - `428 precondition_required`: 既存のセクションに `If-Match` なしで書こうとした。
-- `401` / `403`: トークンがない、失効した、または権限（読み取り専用・対象 State の制限）が足りない。ユーザーに伝える。
+- `401 unauthorized` / `403 forbidden`（JSON の本文あり）: トークンがない、失効した、または権限（読み取り専用・対象 State の制限）が足りない。ユーザーに伝える。本文のない `CONNECT tunnel failed, response 403` はプロキシによる拒否で、別の問題（上の「接続情報」を参照）。
 
 ## 守ること
 

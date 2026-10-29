@@ -26,3 +26,6 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run cli:build
+      - uses: oven-sh/setup-bun@v2
+      - run: npm run cli:compile
+      - run: ./cli/dist/dura --help

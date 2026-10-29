@@ -21,7 +21,7 @@ echo "URL=${DURA_URL:-unset} TOKEN=${DURA_TOKEN:+set} STATE=${DURA_STATE:-unset}
 ```
 
 - `DURA_URL` / `DURA_TOKEN` がない: 環境変数はセッション開始時に読み込まれる。ユーザーに、クラウド環境の設定で環境変数を登録して新しいセッションを始めるよう伝える。トークンをチャットに貼ってもらってはいけない。
-- `DURA_STATE` がない: どの State で作業するかユーザーに確認する。
+- `DURA_STATE` がない: どの State で作業するかユーザーに確認し、その ID を下の `S` に入れる。
 - curl が `CONNECT tunnel failed, response 403`（終了コード 56、JSON の本文なし）で失敗する: dura ではなく環境のプロキシが接続を拒否している。環境のネットワーク設定で、`DURA_URL` のホストを Allowed domains に追加してもらう。dura 自身が返す `403`（JSON で `"code": "forbidden"`）はトークンの権限不足なので、下の「エラーへの対処」を見る。
 
 以降の例では次の変数を使います。
@@ -53,11 +53,12 @@ S="$DURA_STATE"; AUTH="Authorization: Bearer $DURA_TOKEN"
    curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S/journal?after=$N&limit=1000"
    ```
 
-   `404` なら State がまだない。ユーザーに確認したうえで作る。`goal` には完了条件を書いておく。
+   `404` なら State がまだない。ユーザーに確認したうえで作る。`TITLE` には作業名を、`GOAL` には完了条件を、ユーザーと決めた内容で入れる。
 
    ```bash
-   GOAL=$(printf '# Goal\n\n## 完了条件\n\n- ...\n')
-   jq -n --arg id "$S" --arg title "検索の作り直し" --arg goal "$GOAL" '{id:$id, title:$title, sections:{goal:$goal}}' |
+   TITLE="<作業名>"
+   GOAL=$(printf '# Goal\n\n## 完了条件\n\n- <完了条件>\n')
+   jq -n --arg id "$S" --arg title "$TITLE" --arg goal "$GOAL" '{id:$id, title:$title, sections:{goal:$goal}}' |
      curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" --data-binary @- "$DURA_URL/api/states"
    ```
 

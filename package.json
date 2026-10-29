@@ -2,6 +2,7 @@
   "name": "dura",
   "version": "0.1.0",
   "description": "Shared, durable state for AI agent loops: sections, append-only journal, and notifications.",
+  "license": "MIT",
   "type": "module",
   "private": true,
   "engines": {

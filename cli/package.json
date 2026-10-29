@@ -2,6 +2,7 @@
   "name": "@umigame-tech/dura",
   "version": "0.1.0",
   "description": "Command-line client for dura, the shared state server for AI agent loops.",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "dura": "dist/dura.js"

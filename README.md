@@ -228,3 +228,7 @@ src/
 cli/src/            dura CLI（cli.ts が本体、main.ts が Node のエントリポイント）
 drizzle/            SQL マイグレーション（Node と D1 で共用）
 ```
+
+## ライセンス
+
+[MIT](LICENSE)

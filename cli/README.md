@@ -27,3 +27,7 @@ dura guide                                  Print /api/guide
 ```
 
 Run `dura --help` for every option, and `dura guide` for how agents should use dura.
+
+## License
+
+MIT

@@ -1,33 +1,33 @@
 ---
 name: dura
-description: dura（https://dura.umigame.app）で作業状態を読み書きする方法。このリポジトリで作業を始めるとき、作業の区切りで進捗を記録するとき、人間の判断が必要になったとき、ユーザーが「State」「dura の状態」「ジャーナル」「タスク」に触れたときに使う。dura の開発そのものも dura の State「dura」で管理している。
+description: dura サーバーで作業状態を読み書きする方法。作業を始めるとき、作業の区切りで進捗を記録するとき、人間の判断が必要になったとき、ユーザーが「State」「dura の状態」「ジャーナル」「タスク」に触れたときに使う。
 ---
 
 # dura で作業状態を管理する
 
 dura は、エージェントのループが共有する作業状態を、セッションの外に置いておくサーバーです。
-このリポジトリ（dura 自身）の開発も、本番インスタンスの State `dura` で管理しています。
 セッションをまたいで作業を引き継ぐために、作業の最初に読み、区切りごとに書いてください。
 
 ## 接続情報
 
-- `DURA_URL`: サーバーの URL（本番は `https://dura.umigame.app`）
+- `DURA_URL`: dura サーバーの URL
 - `DURA_TOKEN`: エージェント用の Bearer トークン。名前が書き込みの作者として記録される
-- `DURA_STATE`: 対象の State の ID。未設定なら、このリポジトリの作業では `dura` を使う
+- `DURA_STATE`: 対象の State の ID
 
 まず確認します。
 
 ```bash
-echo "URL=${DURA_URL:-unset} TOKEN=${DURA_TOKEN:+set} STATE=${DURA_STATE:-dura}"
+echo "URL=${DURA_URL:-unset} TOKEN=${DURA_TOKEN:+set} STATE=${DURA_STATE:-unset}"
 ```
 
 - `DURA_URL` / `DURA_TOKEN` がない: 環境変数はセッション開始時に読み込まれる。ユーザーに、クラウド環境の設定で環境変数を登録して新しいセッションを始めるよう伝える。トークンをチャットに貼ってもらってはいけない。
-- curl が `CONNECT tunnel failed, response 403`（終了コード 56、JSON の本文なし）で失敗する: dura ではなく環境のプロキシが接続を拒否している。環境のネットワーク設定で `dura.umigame.app` を Allowed domains に追加してもらう。dura 自身が返す `403`（JSON で `"code": "forbidden"`）はトークンの権限不足なので、下の「エラーへの対処」を見る。
+- `DURA_STATE` がない: どの State で作業するかユーザーに確認する。
+- curl が `CONNECT tunnel failed, response 403`（終了コード 56、JSON の本文なし）で失敗する: dura ではなく環境のプロキシが接続を拒否している。環境のネットワーク設定で、`DURA_URL` のホストを Allowed domains に追加してもらう。dura 自身が返す `403`（JSON で `"code": "forbidden"`）はトークンの権限不足なので、下の「エラーへの対処」を見る。
 
 以降の例では次の変数を使います。
 
 ```bash
-S="${DURA_STATE:-dura}"; AUTH="Authorization: Bearer $DURA_TOKEN"
+S="$DURA_STATE"; AUTH="Authorization: Bearer $DURA_TOKEN"
 ```
 
 ## 最初に必ずやること
@@ -53,11 +53,11 @@ S="${DURA_STATE:-dura}"; AUTH="Authorization: Bearer $DURA_TOKEN"
    curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S/journal?after=$N&limit=1000"
    ```
 
-   `404` なら State がまだない。ユーザーに確認したうえで、このスキルと同じディレクトリの `initial-state.json` から作る。
-   ID は `$S` に置き換えて送る（ファイルの `id` は `dura` 固定のため）。
+   `404` なら State がまだない。ユーザーに確認したうえで作る。`goal` には完了条件を書いておく。
 
    ```bash
-   jq --arg id "$S" '.id = $id' .claude/skills/dura/initial-state.json |
+   GOAL=$(printf '# Goal\n\n## 完了条件\n\n- ...\n')
+   jq -n --arg id "$S" --arg title "検索の作り直し" --arg goal "$GOAL" '{id:$id, title:$title, sections:{goal:$goal}}' |
      curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" --data-binary @- "$DURA_URL/api/states"
    ```
 
@@ -85,7 +85,7 @@ S="${DURA_STATE:-dura}"; AUTH="Authorization: Bearer $DURA_TOKEN"
 ```bash
 curl -sS -X POST -H "$AUTH" -H "Content-Type: text/markdown" \
   --data-binary @- "$DURA_URL/api/states/$S/journal?kind=report" <<'EOF'
-CI を追加した（umigame-tech/dura#3）。typecheck と test が PR で走る。
+CI を追加した（#3）。typecheck と test が PR で走る。
 次: CLI の設定まわり。
 EOF
 ```

@@ -4,6 +4,7 @@ import { HTTPException } from "hono/http-exception";
 import { publicOrigin, resolveActor } from "./auth";
 import type { AppEnv, Deps } from "./env";
 import { ApiError } from "./lib/errors";
+import { handleMcp } from "./mcp";
 import { api } from "./routes/api";
 import { assets } from "./routes/assets";
 import { authRoutes } from "./routes/webauthn";
@@ -45,6 +46,13 @@ export function createApp(deps: Deps) {
     await next();
   });
   app.route("/api", api);
+
+  // MCP (Streamable HTTP): a thin adapter that calls the API above with the same bearer token.
+  app.post("/mcp", (c) => handleMcp(c, (req) => app.fetch(req)));
+  app.on(["GET", "DELETE"], "/mcp", (c) => {
+    c.header("Allow", "POST");
+    return c.json({ error: { code: "method_not_allowed", message: "This MCP server is stateless: use POST." } }, 405);
+  });
 
   // Everything else is the web UI, authenticated by the session cookie only.
   app.use("*", csrf({ origin: (origin, c) => origin === publicOrigin(c) }));

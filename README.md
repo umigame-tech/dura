@@ -32,6 +32,7 @@ GET     /api/states/:id/sections/:name/revisions      全 revision
 GET     /api/states/:id/journal                       ジャーナル（?after=<seq>）
 POST    /api/states/:id/journal                       追記 {kind, body}、または Markdown 本文 + ?kind=
 GET     /api/guide                                    エージェント向けの使い方（Markdown）
+POST    /mcp                                          MCP（Streamable HTTP、下の「MCP」を参照）
 ```
 
 - `Accept: text/markdown` を付けると、`GET /api/states/:id` は全セクションと指定位置以降のジャーナルを 1 つの Markdown にまとめて返します。エージェントは 1 回の呼び出しで作業に必要な文脈を読み込めます。
@@ -114,6 +115,30 @@ npm stage approve <stage-id>
 ```
 
 npm への認証には Trusted Publishing を使います。npm のパッケージ設定で、Trusted Publisher として GitHub Actions の `umigame-tech/dura` と `publish-cli.yml` を登録しておきます。トークンは不要です。provenance は、リポジトリが public のときだけ npm が自動で付けます（private リポジトリからは付けられません）。Allowed actions の `npm publish` は許可しないでください（ステージングだけで足ります）。
+
+## MCP
+
+サーバーは `POST /mcp` で MCP（Streamable HTTP）にも対応しています。インストールは不要で、エージェント用の Bearer トークンをヘッダーに付けて接続します。
+中身は REST API を呼ぶだけの薄い層なので、権限・楽観ロック・通知は API と同じように働きます。
+
+```bash
+claude mcp add --transport http dura https://dura.example.com/mcp --header "Authorization: Bearer $DURA_TOKEN"
+```
+
+| ツール | CLI で言うと |
+| --- | --- |
+| `list_states` | `dura list` |
+| `show_state` | `dura show` |
+| `read_journal` | `dura journal` |
+| `get_section` | `dura section get`（先頭に `<!-- version: N -->` が付きます） |
+| `put_section` | `dura section put` |
+| `replace_in_section` | `dura section replace` |
+| `append_journal` | `dura log` |
+| `set_status` | `dura status` |
+
+- State の ID はツールごとに `state` 引数で渡します。State の作成は人間の確認が前提なので、MCP からはできません。
+- ステートレスで、応答は JSON だけです（SSE やセッション ID は使いません）。OAuth には対応していないため、ヘッダーを設定できるクライアントで使います。
+- `initialize` の `instructions` に、読み書きの手順を短くまとめて返します。
 
 ## 認証
 

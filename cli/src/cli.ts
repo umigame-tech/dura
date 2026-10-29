@@ -1,4 +1,5 @@
 import { parseArgs } from "node:util";
+import { version } from "../package.json";
 
 /** Everything the CLI touches outside itself, so tests can run it against an in-process app. */
 export interface Io {
@@ -10,7 +11,7 @@ export interface Io {
   stderr: (text: string) => void;
 }
 
-export const VERSION = "0.1.0";
+export const VERSION = version;
 
 const STATUSES = ["active", "waiting", "completed", "abandoned"];
 

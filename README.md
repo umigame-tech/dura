@@ -47,7 +47,13 @@ GET     /api/guide                                    エージェント向け�
 
 ## CLI
 
-`cli/` に依存パッケージのない CLI があります（npm での配布は準備中です）。今はリポジトリでビルドして使います。
+`cli/` に依存パッケージのない CLI があり、npm で `@umigame-tech/dura` として配布します（Node 20 以上）。コマンド名は `dura` です。
+
+```bash
+npm install -g @umigame-tech/dura
+```
+
+リポジトリから使うときはビルドします。
 
 ```bash
 npm run cli:build
@@ -84,6 +90,19 @@ dura guide                                  /api/guide を表示
 ```
 
 書き込みが拒否されたときは、サーバーのエラーに加えて、CLI で次に何をすればよいか（`dura section get tasks` で読み直して `--version 8` で再送する、など）を表示します。
+
+### CLI の公開
+
+`cli/package.json` の `version` を上げてマージした後、`cli-v<version>` のタグを push すると、GitHub Actions（`.github/workflows/publish-cli.yml`）が typecheck・test・ビルドを行い、npm に公開します。CLI の `dura -V` も `cli/package.json` の `version` を表示します。
+
+```bash
+git tag cli-v0.1.0 && git push origin cli-v0.1.0
+```
+
+npm への認証は次のどちらかです。
+
+- リポジトリのシークレット `NPM_TOKEN`（npm の Granular Access Token。初回の公開はこちらが必要です）
+- npm の Trusted Publishing。パッケージの設定で、GitHub Actions の `umigame-tech/dura` と `publish-cli.yml` を登録します。登録後は `NPM_TOKEN` を削除できます。
 
 ## 認証
 

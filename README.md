@@ -93,7 +93,11 @@ dura guide                                  /api/guide を表示
 
 ### CLI の公開
 
-`cli/package.json` の `version` を上げてマージした後、`cli-v<version>` のタグを push すると、GitHub Actions（`.github/workflows/publish-cli.yml`）が typecheck・test・ビルドを行い、npm に公開します。CLI の `dura -V` も `cli/package.json` の `version` を表示します。
+`cli/package.json` の `version` を上げてマージした後、main のコミットに `cli-v<version>` のタグを付けて push すると、GitHub Actions（`.github/workflows/publish-cli.yml`）が typecheck・test・ビルドを行い、npm に公開します。main に含まれないコミットのタグでは公開しません。CLI の `dura -V` も `cli/package.json` の `version` を表示します。
+
+```bash
+git switch main && git pull
+```
 
 ```bash
 git tag cli-v0.1.0 && git push origin cli-v0.1.0

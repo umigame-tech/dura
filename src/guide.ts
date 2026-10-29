@@ -37,6 +37,12 @@ A one-line instruction in your agent configuration can be:
 
     Manage work state with dura. First read $DURA_URL/api/guide, then follow its Reading procedure through every journal page before choosing work.
 
+If your client is connected to dura over MCP (\`POST ${origin}/mcp\` with the same bearer token),
+the tools map to the CLI commands below: \`list_states\` (list), \`show_state\` (show),
+\`read_journal\` (journal), \`get_section\`, \`put_section\`, \`replace_in_section\` (section),
+\`append_journal\` (log) and \`set_status\` (status). Pass the state id as \`state\` and
+follow the same procedure.
+
 ## Model
 
 A **state** has a status and two kinds of content:
@@ -222,6 +228,7 @@ After confirming the title and goal with the human, create a new state
     GET    /api/states/:id/journal                       entries (?after=, ?limit=)
     POST   /api/states/:id/journal                       append {kind, body} or Markdown body with ?kind=
     GET    /api/guide                                    this document
+    POST   /mcp                                          MCP (Streamable HTTP, stateless, bearer token)
 
 Send \`Accept: text/markdown\` to get Markdown instead of JSON where it makes sense.
 `;

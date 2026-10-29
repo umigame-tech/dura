@@ -1,6 +1,7 @@
 name: Publish CLI
 
-# Push a tag such as cli-v0.1.0 to publish cli/ to npm as @umigame-tech/dura.
+# Push a tag such as cli-v0.1.0 to stage cli/ on npm as @umigame-tech/dura.
+# A maintainer then approves the staged version with 2FA (npm stage approve).
 on:
   push:
     tags: ["cli-v*"]
@@ -32,5 +33,7 @@ jobs:
           version=$(node -p "require('./cli/package.json').version")
           test "$GITHUB_REF_NAME" = "cli-v$version" || { echo "Tag $GITHUB_REF_NAME does not match cli/package.json version $version"; exit 1; }
           test "$(node cli/dist/dura.js -V)" = "$version"
-      - run: npm publish
+      - name: Install npm with staged publishing
+        run: npm install -g npm@^11.15.0
+      - run: npm stage publish
         working-directory: cli

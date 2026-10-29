@@ -71,8 +71,15 @@ function query(params: Record<string, string | number | undefined>): string {
   return entries.length ? `?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)]))}` : "";
 }
 
-const state = (args: Json) => encodeURIComponent(str(args, "state", true));
-const sectionPath = (args: Json) => `/states/${state(args)}/sections/${encodeURIComponent(str(args, "name", true))}`;
+/** A path segment for the API. "." and ".." are rejected because the URL would normalize them away. */
+function segment(args: Json, key: string): string {
+  const v = str(args, key, true);
+  if (v === "." || v === "..") throw new ToolError(`${key} must not be "${v}".`);
+  return encodeURIComponent(v);
+}
+
+const state = (args: Json) => segment(args, "state");
+const sectionPath = (args: Json) => `/states/${state(args)}/sections/${segment(args, "name")}`;
 
 const MD = { Accept: "text/markdown" };
 const JSON_BODY = { "Content-Type": "application/json" };
@@ -269,10 +276,13 @@ interface RpcRequest {
 const rpcError = (id: unknown, code: number, message: string) => ({ jsonrpc: "2.0", id: id ?? null, error: { code, message } });
 
 async function dispatch(msg: RpcRequest, api: Api): Promise<Json | null> {
+  // Responses from the client answer nothing this server asked, so they get no reply.
+  const isResponse = typeof msg === "object" && msg !== null && msg.method === undefined && ("result" in msg || "error" in msg);
+  if (isResponse && msg.jsonrpc === "2.0") return null;
   if (typeof msg !== "object" || msg === null || msg.jsonrpc !== "2.0" || typeof msg.method !== "string") {
     return rpcError(msg?.id, -32600, "Invalid JSON-RPC request.");
   }
-  // Notifications and responses carry no id and get no reply.
+  // Notifications carry no id and get no reply.
   if (msg.id === undefined) return null;
   const params = (typeof msg.params === "object" && msg.params !== null ? msg.params : {}) as Json;
   const result = (r: Json) => ({ jsonrpc: "2.0", id: msg.id, result: r });

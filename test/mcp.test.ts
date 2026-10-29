@@ -35,6 +35,8 @@ describe("mcp", () => {
 
     const notified = await post({ jsonrpc: "2.0", method: "notifications/initialized" });
     expect(notified.status).toBe(202);
+    const response = await post({ jsonrpc: "2.0", id: 99, result: {} });
+    expect(response.status).toBe(202);
 
     const { result } = await rpc("tools/list");
     expect(result.tools.map((t: { name: string }) => t.name)).toEqual([
@@ -112,6 +114,8 @@ describe("mcp", () => {
     expect(missing.text).toContain("list_states");
 
     expect((await tool("get_section", { name: "tasks" })).text).toBe("state is required.");
+    expect(await tool("get_section", { state: "s", name: ".." })).toEqual({ isError: true, text: 'name must not be "..".' });
+    expect(await tool("show_state", { state: "." })).toEqual({ isError: true, text: 'state must not be ".".' });
     expect((await tool("set_status", { state: "s", status: "done" })).isError).toBe(true);
 
     const reader = await tokenFor("reader", "read");

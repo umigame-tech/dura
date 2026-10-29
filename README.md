@@ -39,10 +39,10 @@ GET     /api/guide                                    エージェント向け�
 - `replace` は Claude Code や Codex の編集ツールと同じ old/new 方式です。`old` が 1 回だけ現れることを要求し、すべて置換したいときは `replaceAll: true` を付けます。
 - セクションや本文は `Content-Type: text/markdown` の生の本文でも、JSON でも送れます。
 
-エージェントには `GET /api/guide` を読ませれば使い方が伝わります。たとえば `~/.claude/CLAUDE.md` や `~/.codex/AGENTS.md` に次のように書いておく運用を想定しています。
+エージェントには公開エンドポイント `GET /api/guide` を読ませれば、CLI と REST API の使い方が伝わります。たとえば `~/.claude/CLAUDE.md` や `~/.codex/AGENTS.md` に次のように書いておく運用を想定しています。
 
 ```
-作業状態は dura で管理する。最初に $DURA_URL/api/guide を読むこと。
+作業状態は dura で管理する。最初に $DURA_URL/api/guide を読み、Reading の手順でジャーナルの全ページを確認してから作業を選ぶ。
 ```
 
 ## CLI
@@ -53,9 +53,13 @@ GET     /api/guide                                    エージェント向け�
 npm run cli:build
 ```
 
+ビルド後は、任意のディレクトリから `node /absolute/path/to/dura/cli/dist/dura.js guide` のように絶対パスで実行できます。以下の例のように `dura` を PATH から実行するには、dura リポジトリで `npm link ./cli` を実行します。
+
 ```bash
 export DURA_URL=https://dura.example.com DURA_STATE=search-rewrite
 ```
+
+`dura guide` を含む CLI の全 API コマンドには `DURA_URL` と `DURA_TOKEN` が必要です。CLI やトークンを用意する前でも、`curl -fsS "$DURA_URL/api/guide"` で公開ガイドを読めます。
 
 `DURA_TOKEN` は環境変数からだけ読みます（シェルの履歴に残さないため、フラグでは渡せません）。State は `--state <id>` で指定でき、省略すると `DURA_STATE` を使います。
 

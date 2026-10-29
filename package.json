@@ -18,7 +18,7 @@
     "worker:deploy": "wrangler d1 migrations apply dura --remote && wrangler deploy",
     "worker:migrate": "wrangler d1 migrations apply dura --remote",
     "cli:build": "esbuild cli/src/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=cli/dist/dura.js --banner:js=\"#!/usr/bin/env node\"",
-    "cli:compile": "bun build cli/src/main.ts --compile --minify --outfile cli/dist/dura"
+    "cli:compile": "bun build cli/src/main.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --minify --outfile cli/dist/dura"
   },
   "dependencies": {
     "@hono/node-server": "^1.19.5",

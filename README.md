@@ -59,7 +59,7 @@ Node なしで動く単一バイナリが必要なときは、[Bun](https://bun.
 npm run cli:compile
 ```
 
-別のプラットフォーム向けには `bun build cli/src/main.ts --compile --target=bun-darwin-arm64 --outfile dura` のように `--target` を指定します。
+別のプラットフォーム向けには `bun build cli/src/main.ts --compile --no-compile-autoload-dotenv --no-compile-autoload-bunfig --target=bun-darwin-arm64 --outfile dura` のように `--target` を指定します。`--no-compile-autoload-*` は、実行したディレクトリの `.env` や `bunfig.toml` をバイナリが読み込まないようにするためのものです（作業中のリポジトリのファイルでトークンや接続先が変わったり、コードが実行されたりするのを防ぎます）。
 
 `cli:build` のビルド後は、任意のディレクトリから `node /absolute/path/to/dura/cli/dist/dura.js guide` のように絶対パスで実行できます。以下の例のように `dura` を PATH から実行するには、dura リポジトリで `npm link ./cli` を実行します。
 

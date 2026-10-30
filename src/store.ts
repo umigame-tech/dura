@@ -281,6 +281,8 @@ export async function listJournal(
 }
 
 /** A page of entries, newest first, for the web UI. The REST API keeps the oldest-first `listJournal`. */
+// Offset paging shifts when entries are appended while someone is paging, so an entry can show on two pages.
+// The UI pages by number (?jpage=), which is fine for reading; a seq cursor (seq < before) would avoid the shift.
 export async function journalPage(
   db: DB,
   stateId: string,

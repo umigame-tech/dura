@@ -13,7 +13,7 @@ export function Layout(props: { title: string; loggedIn?: boolean; children: Chi
         <link rel="stylesheet" href="/static/app.css" />
         <link rel="manifest" href="/manifest.webmanifest" />
         <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-        <link rel="apple-touch-icon" href="/icon.svg" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="theme-color" content="#1f6f5c" />
         <script src="/static/app.js" defer></script>
       </head>

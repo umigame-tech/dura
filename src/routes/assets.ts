@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../env";
+import { APPLE_TOUCH_ICON, BADGE_96, ICON_192, ICON_512, ICON_MASKABLE_512 } from "./icons";
 
 export const assets = new Hono<AppEnv>();
 
@@ -205,8 +206,8 @@ self.addEventListener("push", (event) => {
   try { data = event.data ? event.data.json() : {}; } catch { data = { title: "dura", body: event.data && event.data.text() }; }
   event.waitUntil(self.registration.showNotification(data.title || "dura", {
     body: data.body || "",
-    icon: "/icon.svg",
-    badge: "/icon.svg",
+    icon: "/icon-192.png",
+    badge: "/badge-96.png",
     tag: data.stateId ? "state-" + data.stateId : undefined,
     renotify: true,
     data: { url: data.url || "/" },
@@ -233,7 +234,12 @@ const MANIFEST = {
   display: "standalone",
   background_color: "#f7f7f5",
   theme_color: "#1f6f5c",
-  icons: [{ src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any maskable" }],
+  icons: [
+    { src: "/icon.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
+    { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+    { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+    { src: "/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+  ],
 };
 
 const cacheable = { "Cache-Control": "public, max-age=3600" };
@@ -246,6 +252,17 @@ assets.get("/sw.js", (c) =>
   c.body(SERVICE_WORKER, 200, { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "no-cache" }),
 );
 assets.get("/icon.svg", (c) => c.body(ICON, 200, { "Content-Type": "image/svg+xml", ...cacheable }));
+const PNGS: Record<string, string> = {
+  "/icon-192.png": ICON_192,
+  "/icon-512.png": ICON_512,
+  "/icon-maskable-512.png": ICON_MASKABLE_512,
+  "/apple-touch-icon.png": APPLE_TOUCH_ICON,
+  "/badge-96.png": BADGE_96,
+};
+for (const [path, base64] of Object.entries(PNGS)) {
+  const bytes = Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
+  assets.get(path, (c) => c.body(bytes, 200, { "Content-Type": "image/png", ...cacheable }));
+}
 assets.get("/manifest.webmanifest", (c) =>
   c.body(JSON.stringify(MANIFEST), 200, { "Content-Type": "application/manifest+json", ...cacheable }),
 );

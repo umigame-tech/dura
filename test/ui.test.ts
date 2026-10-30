@@ -154,6 +154,13 @@ describe("web UI", () => {
   it("serves PWA assets", async () => {
     const { app } = await setup();
     expect((await app.request("/sw.js")).status).toBe(200);
-    expect((await (await app.request("/manifest.webmanifest")).json()).display).toBe("standalone");
+    const manifest = await (await app.request("/manifest.webmanifest")).json();
+    expect(manifest.display).toBe("standalone");
+    const paths = [...manifest.icons.map((i: { src: string }) => i.src), "/apple-touch-icon.png", "/badge-96.png"];
+    for (const path of paths.filter((p) => p.endsWith(".png"))) {
+      const res = await app.request(path);
+      expect(res.headers.get("Content-Type")).toBe("image/png");
+      expect([...new Uint8Array(await res.arrayBuffer()).slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    }
   });
 });

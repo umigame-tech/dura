@@ -74,9 +74,9 @@ npm run cli:compile
 export DURA_URL=https://dura.example.com DURA_STATE=search-rewrite
 ```
 
-`dura guide` を含む CLI の全 API コマンドには `DURA_URL` と `DURA_TOKEN` が必要です。CLI やトークンを用意する前でも、`curl -fsS "$DURA_URL/api/guide"` で公開ガイドを読めます。
+`dura guide` は公開ガイドを読むだけなので、`DURA_URL` だけで動き、トークンを送りません。ほかのコマンドには `DURA_TOKEN` も必要です。CLI を用意する前でも、`curl -fsS "$DURA_URL/api/guide"` で公開ガイドを読めます。
 
-`DURA_TOKEN` は環境変数からだけ読みます（シェルの履歴に残さないため、フラグでは渡せません）。State は `--state <id>` で指定でき、省略すると `DURA_STATE` を使います。
+トークンはシェルの履歴に残さないため、フラグの値では渡せません。`DURA_TOKEN` に入れるか、`--token-file <path>` でファイルから、`--token-stdin` で標準入力から読みます（`--token-stdin` のときは、`log` や `section put` の本文を `--file` で渡します）。サーバーは `--url <url>` で指定でき、`DURA_URL` より優先します。State は `--state <id>` で指定でき、省略すると `DURA_STATE` を使います。
 
 ```
 dura show                                   全セクションとジャーナル（Markdown、--json で JSON）

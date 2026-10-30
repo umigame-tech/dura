@@ -91,11 +91,15 @@ describe("web UI", () => {
   it("only follows a same-site next after login", async () => {
     const { app } = await setup();
     const js = await (await app.request("/static/app.js")).text();
-    const source = /location\.href = next && (\/.+\/)\.test\(next\)/.exec(js)![1];
-    const sameSite = new Function(`return ${source}`)() as RegExp;
-    for (const ok of ["/", "/s/x?section=goal", "/settings"]) expect(sameSite.test(ok)).toBe(true);
-    for (const bad of ["//evil.example", "/\\evil.example", "javascript:alert(1)", "https://evil.example"]) {
-      expect(sameSite.test(bad)).toBe(false);
+    expect(js).toContain("location.href = sameSitePath(");
+    const source = /function sameSitePath[\s\S]*?\n}\n/.exec(js)![0];
+    const sameSitePath = new Function(`${source}; return sameSitePath;`)() as (next: string | null, origin: string) => string;
+    const origin = "https://dura.example";
+    expect(sameSitePath(null, origin)).toBe("/");
+    expect(sameSitePath("/s/x?section=goal#j3", origin)).toBe("/s/x?section=goal#j3");
+    expect(sameSitePath("/settings", origin)).toBe("/settings");
+    for (const bad of ["//evil.example", "/\\evil.example", "/\t/evil.example", "/\n/evil.example", "javascript:alert(1)", "https://evil.example"]) {
+      expect(sameSitePath(bad, origin)).toBe("/");
     }
   });
 

@@ -311,6 +311,17 @@ const MANIFEST = {
   ],
 };
 
+// Changes whenever the CSS or JS does. The layout puts it in the asset URLs, so a cached copy from an earlier deploy
+// (iOS home-screen apps hold on to one) is never paired with newer HTML.
+export function contentVersion(...parts: string[]): string {
+  const s = parts.join("\0");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(36);
+}
+
+export const ASSET_VERSION = contentVersion(CSS, CLIENT_JS);
+
 const cacheable = { "Cache-Control": "public, max-age=3600" };
 
 assets.get("/static/app.css", (c) => c.body(CSS, 200, { "Content-Type": "text/css; charset=utf-8", ...cacheable }));

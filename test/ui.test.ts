@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { passkeys, pushSubscriptions } from "../src/db/schema";
 import type { Deps } from "../src/env";
-import { ICON } from "../src/routes/assets";
+import { ASSET_VERSION, contentVersion, ICON } from "../src/routes/assets";
 import { SOURCE_ICON_SHA256 } from "../src/routes/icons";
 import { base64urlEncode } from "../src/lib/util";
 import { ORIGIN, setup } from "./helpers";
@@ -162,6 +162,27 @@ describe("web UI", () => {
 
     const js = await (await app.request("/static/app.js")).text();
     expect(js).toContain('document.querySelector("[data-nav-toggle]")');
+  });
+
+  it("versions the CSS and JS URLs so a cached copy is not paired with newer HTML", async () => {
+    const { app, get } = await loggedIn();
+    const home = await (await get("/")).text();
+    const css = /href="(\/static\/app\.css\?v=\w+)"/.exec(home)?.[1];
+    const js = /src="(\/static\/app\.js\?v=\w+)"/.exec(home)?.[1];
+    expect(css).toBeDefined();
+    expect(js).toBeDefined();
+    expect(css).toBe(`/static/app.css?v=${ASSET_VERSION}`);
+    expect(js).toBe(`/static/app.js?v=${ASSET_VERSION}`);
+    const cssBody = await (await app.request(css!)).text();
+    const jsBody = await (await app.request(js!)).text();
+    expect(cssBody).toContain(".nav-toggle");
+    expect(jsBody).toContain("[data-nav-toggle]");
+    expect(ASSET_VERSION).toBe(contentVersion(cssBody, jsBody));
+    // A change to either file gives a new version.
+    expect(contentVersion(cssBody + " ", jsBody)).not.toBe(ASSET_VERSION);
+    expect(contentVersion(cssBody, jsBody + " ")).not.toBe(ASSET_VERSION);
+    expect(contentVersion("ab", "c")).not.toBe(contentVersion("a", "bc"));
+    expect(contentVersion("😀")).not.toBe(contentVersion("😁"));
   });
 
   it("shows a diff instead of overwriting on conflict", async () => {

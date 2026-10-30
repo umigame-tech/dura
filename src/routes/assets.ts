@@ -23,14 +23,28 @@ const CSS = `
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", sans-serif; }
+body { margin: 0; display: flex; flex-direction: column; min-height: 100vh; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", sans-serif; }
 a { color: var(--accent); }
 header.top { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
 header.top .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text); text-decoration: none; }
 header.top .brand img { width: 24px; height: 24px; }
-header.top nav { margin-left: auto; display: flex; gap: 14px; align-items: center; }
-header.top nav form { margin: 0; }
-main { max-width: 920px; margin: 0 auto; padding: 20px 16px 64px; }
+header.top .nav-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin: -4px 0 -4px -6px; border-radius: 8px; color: var(--text); }
+header.top .nav-toggle:hover { background: var(--code); }
+main { width: 100%; max-width: 920px; margin: 0 auto; padding: 20px 16px 64px; }
+.shell { flex: 1; display: flex; }
+.shell main { flex: 1; min-width: 0; }
+.side { flex: 0 0 200px; display: flex; flex-direction: column; gap: 2px; padding: 16px 10px; border-right: 1px solid var(--border); background: var(--surface); }
+.side a, .side button.link { display: block; width: 100%; padding: 8px 12px; border-radius: 8px; color: var(--text); text-decoration: none; text-align: left; }
+.side a:hover, .side button.link:hover { background: var(--code); }
+.side a[aria-current=page] { background: var(--code); color: var(--accent); font-weight: 600; }
+.side form { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--border); }
+body.nav-collapsed .side { display: none; }
+.nav-backdrop { display: none; }
+@media (max-width: 760px) {
+  .side, body.nav-collapsed .side { display: flex; position: fixed; top: 0; bottom: 0; left: 0; z-index: 20; width: 240px; transform: translateX(-100%); visibility: hidden; transition: transform 0.2s ease, visibility 0.2s; }
+  .side:target, body.nav-open .side { transform: none; visibility: visible; box-shadow: 0 0 24px rgb(0 0 0 / 0.2); }
+  body.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 10; background: rgb(0 0 0 / 0.35); }
+}
 h1 { font-size: 1.5rem; margin: 0 0 4px; line-height: 1.3; }
 h2 { font-size: 1.15rem; margin: 28px 0 10px; }
 .muted { color: var(--muted); font-size: 0.9em; }
@@ -195,6 +209,26 @@ document.addEventListener("click", async (ev) => {
     el.disabled = false;
   }
 });
+
+// Side menu: on a wide screen the toggle collapses it (remembered in a cookie); on a narrow one it opens an overlay.
+const navToggle = document.querySelector("[data-nav-toggle]");
+if (navToggle) {
+  const narrow = matchMedia("(max-width: 760px)");
+  const body = document.body;
+  const sync = () => navToggle.setAttribute("aria-expanded", String(narrow.matches ? body.classList.contains("nav-open") : !body.classList.contains("nav-collapsed")));
+  const setOpen = (open) => { body.classList.toggle("nav-open", open); sync(); };
+  sync();
+  narrow.addEventListener("change", () => setOpen(false));
+  navToggle.addEventListener("click", (ev) => {
+    ev.preventDefault();
+    if (narrow.matches) return setOpen(!body.classList.contains("nav-open"));
+    const collapsed = body.classList.toggle("nav-collapsed");
+    document.cookie = "dura_nav=" + (collapsed ? "collapsed" : "open") + "; path=/; max-age=31536000; samesite=lax";
+    sync();
+  });
+  document.querySelector("[data-nav-close]").addEventListener("click", () => setOpen(false));
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") setOpen(false); });
+}
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 `;

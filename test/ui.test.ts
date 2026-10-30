@@ -11,7 +11,8 @@ async function loggedIn(overrides: Partial<Deps> = {}) {
   const ctx = await setup(overrides);
   await ctx.db.insert(passkeys).values({ id: "cred", name: "laptop", publicKey: "x" });
   const cookie = await ctx.ownerCookie();
-  const get = (path: string) => ctx.app.request(path, { headers: { Cookie: cookie } });
+  const get = (path: string, extraCookie?: string) =>
+    ctx.app.request(path, { headers: { Cookie: extraCookie ? `${cookie}; ${extraCookie}` : cookie } });
   const post = (path: string, fields: Record<string, string>, origin = ORIGIN) =>
     ctx.app.request(path, {
       method: "POST",
@@ -108,6 +109,26 @@ describe("web UI", () => {
     const added = await post("/s/x/journal", { kind: "note", body: "entry-24-end" });
     expect(added.headers.get("Location")).toBe("/s/x#j24");
     expect(await (await get("/s/x")).text()).toContain('id="j24"');
+  });
+
+  it("puts the menu in a side nav that can stay collapsed", async () => {
+    const { app, get } = await loggedIn();
+    const home = await (await get("/")).text();
+    expect(home).toContain('<nav id="sidenav" class="side" aria-label="Main"><a href="/" aria-current="page">States</a>');
+    expect(home).toContain('<a href="/settings">Settings</a>');
+    expect(home).toContain('action="/logout"');
+    expect(home).toContain('href="#sidenav"');
+    expect(home).not.toContain("nav-collapsed");
+
+    const settings = await (await get("/settings")).text();
+    expect(settings).toContain('<a href="/">States</a>');
+    expect(settings).toContain('<a href="/settings" aria-current="page">Settings</a>');
+
+    const collapsed = await (await get("/", "dura_nav=collapsed")).text();
+    expect(collapsed).toContain('<body class="nav-collapsed">');
+
+    const login = await (await app.request("/login")).text();
+    expect(login).not.toContain("sidenav");
   });
 
   it("shows a diff instead of overwriting on conflict", async () => {

@@ -3,7 +3,9 @@ import { raw } from "hono/html";
 import type { StateStatus } from "../db/schema";
 import { lineDiff, renderMarkdown } from "../lib/markdown";
 
-export function Layout(props: { title: string; loggedIn?: boolean; children: Child }) {
+export function Layout(props: { title: string; loggedIn?: boolean; path?: string; navCollapsed?: boolean; children: Child }) {
+  const current = (href: string) =>
+    (href === "/settings" ? props.path?.startsWith("/settings") : !props.path?.startsWith("/settings")) ? "page" : undefined;
   return (
     <html lang="en">
       <head>
@@ -17,25 +19,42 @@ export function Layout(props: { title: string; loggedIn?: boolean; children: Chi
         <meta name="theme-color" content="#1f6f5c" />
         <script src="/static/app.js" defer></script>
       </head>
-      <body>
+      <body class={props.loggedIn && props.navCollapsed ? "nav-collapsed" : undefined}>
         <header class="top">
+          {props.loggedIn && (
+            // A link so that the menu still opens through :target without JS; app.js turns it into a toggle.
+            <a class="nav-toggle" href="#sidenav" aria-controls="sidenav" aria-label="Menu" data-nav-toggle>
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </a>
+          )}
           <a class="brand" href="/">
             <img src="/icon.svg" alt="" />
             dura
           </a>
-          {props.loggedIn && (
-            <nav>
-              <a href="/">States</a>
-              <a href="/settings">Settings</a>
+        </header>
+        {props.loggedIn ? (
+          <div class="shell">
+            <nav id="sidenav" class="side" aria-label="Main">
+              <a href="/" aria-current={current("/")}>
+                States
+              </a>
+              <a href="/settings" aria-current={current("/settings")}>
+                Settings
+              </a>
               <form method="post" action="/logout">
                 <button class="link" type="submit">
                   Log out
                 </button>
               </form>
             </nav>
-          )}
-        </header>
-        <main>{props.children}</main>
+            <div class="nav-backdrop" data-nav-close></div>
+            <main>{props.children}</main>
+          </div>
+        ) : (
+          <main>{props.children}</main>
+        )}
       </body>
     </html>
   );

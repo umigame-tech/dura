@@ -80,6 +80,29 @@ describe("web UI", () => {
     expect(html).not.toContain("<img src=x");
   });
 
+  it("pages the journal newest first", async () => {
+    const { get, post } = await loggedIn();
+    await post("/states", { title: "X", id: "x" });
+    for (let i = 1; i <= 23; i++) await post("/s/x/journal", { kind: "note", body: `entry-${i}-end` });
+
+    const first = await (await get("/s/x?section=goal")).text();
+    expect(first.indexOf("entry-23-end")).toBeLessThan(first.indexOf("entry-14-end"));
+    expect(first).not.toContain("entry-13-end");
+    expect(first).toContain("Page 1 of 3 · 23 entries");
+    expect(first).toContain('href="/s/x?section=goal&amp;jpage=2#journal"');
+    expect(first).not.toContain("← Newer");
+
+    const last = await (await get("/s/x?jpage=3")).text();
+    expect(last).toContain("entry-1-end");
+    expect(last).toContain("entry-3-end");
+    expect(last).not.toContain("entry-4-end");
+    expect(last).toContain('href="/s/x?jpage=2#journal"');
+    expect(last).not.toContain("Older →");
+
+    expect(await (await get("/s/x?jpage=99")).text()).toContain("Page 3 of 3");
+    expect(await (await get("/s/x?jpage=abc")).text()).toContain("Page 1 of 3");
+  });
+
   it("shows a diff instead of overwriting on conflict", async () => {
     const { get, post } = await loggedIn();
     await post("/states", { title: "X", id: "x" });

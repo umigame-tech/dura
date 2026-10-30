@@ -11,16 +11,16 @@ import { passkeyCount } from "../routes/webauthn";
 import {
   appendJournal,
   assertSectionName,
+  countJournal,
   createState,
   findSection,
   getSection,
   getState,
-  lastJournalSeq,
+  journalPage,
   listRevisions,
   listSections,
   listStates,
   putSection,
-  tailJournal,
   updateState,
   type Section,
   type State,
@@ -29,7 +29,7 @@ import { Diff, Flash, Layout, Markdown, StatusBadge, Time } from "./layout";
 
 export const ui = new Hono<AppEnv>();
 
-const JOURNAL_PAGE = 100;
+const JOURNAL_PAGE = 10;
 
 // ---------------------------------------------------------------------------
 // Login & setup
@@ -113,8 +113,12 @@ async function form(c: Context<AppEnv>): Promise<Record<string, string>> {
   return out;
 }
 
-const stateUrl = (id: string, section?: string) =>
-  `/s/${encodeURIComponent(id)}${section ? `?section=${encodeURIComponent(section)}` : ""}`;
+const stateUrl = (id: string, section?: string, jpage = 1) => {
+  const q = new URLSearchParams();
+  if (section) q.set("section", section);
+  if (jpage > 1) q.set("jpage", String(jpage));
+  return `/s/${encodeURIComponent(id)}${q.size ? `?${q}` : ""}`;
+};
 const sectionUrl = (id: string, name: string, suffix = "") =>
   `/s/${encodeURIComponent(id)}/sections/${encodeURIComponent(name)}${suffix}`;
 
@@ -197,17 +201,17 @@ ui.get("/s/:id", async (c) => {
   const { db } = c.get("deps");
   const id = c.req.param("id");
   const state = await getState(db, id);
-  const [sections, journal, lastSeq] = await Promise.all([
-    listSections(db, id),
-    tailJournal(db, id, JOURNAL_PAGE),
-    lastJournalSeq(db, id),
-  ]);
+  const [sections, total] = await Promise.all([listSections(db, id), countJournal(db, id)]);
+  const pages = Math.max(Math.ceil(total / JOURNAL_PAGE), 1);
+  const jpage = Math.min(Math.max(Number.parseInt(c.req.query("jpage") ?? "", 10) || 1, 1), pages);
+  const journal = await journalPage(db, id, { limit: JOURNAL_PAGE, offset: (jpage - 1) * JOURNAL_PAGE });
   const preferred = ["goal", "plan", "design", "tasks"];
   sections.sort((a, b) => {
     const [ia, ib] = [preferred.indexOf(a.name), preferred.indexOf(b.name)];
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.name.localeCompare(b.name);
   });
-  const currentName = c.req.query("section") ?? sections[0]?.name;
+  const sectionParam = c.req.query("section");
+  const currentName = sectionParam ?? sections[0]?.name;
   const current = sections.find((s) => s.name === currentName);
 
   return page(
@@ -247,7 +251,7 @@ ui.get("/s/:id", async (c) => {
 
       <nav class="tabs">
         {sections.map((s) => (
-          <a href={stateUrl(id, s.name)} class={s === current ? "current" : ""}>
+          <a href={stateUrl(id, s.name, jpage)} class={s === current ? "current" : ""}>
             {s.name}
           </a>
         ))}
@@ -257,12 +261,7 @@ ui.get("/s/:id", async (c) => {
         {current ? <SectionView stateId={id} section={current} /> : <p class="muted">No sections yet.</p>}
       </div>
 
-      <h2>Journal</h2>
-      {lastSeq > journal.length && (
-        <p class="muted">
-          Showing the latest {journal.length} of {lastSeq} entries. Older entries are available via the API.
-        </p>
-      )}
+      <h2 id="journal">Journal</h2>
       {journal.length === 0 && <p class="muted">No journal entries yet.</p>}
       <ol class="journal">
         {journal.map((e) => (
@@ -274,6 +273,15 @@ ui.get("/s/:id", async (c) => {
           </li>
         ))}
       </ol>
+      {pages > 1 && (
+        <nav class="pager">
+          {jpage > 1 ? <a href={`${stateUrl(id, sectionParam, jpage - 1)}#journal`}>← Newer</a> : <span />}
+          <span class="muted">
+            Page {jpage} of {pages} · {total} entries
+          </span>
+          {jpage < pages ? <a href={`${stateUrl(id, sectionParam, jpage + 1)}#journal`}>Older →</a> : <span />}
+        </nav>
+      )}
       <details>
         <summary class="muted">Add a note</summary>
         <form class="stack" method="post" action={`/s/${encodeURIComponent(id)}/journal`}>

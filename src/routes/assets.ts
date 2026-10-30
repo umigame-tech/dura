@@ -66,6 +66,7 @@ h2 { font-size: 1.15rem; margin: 28px 0 10px; }
 .journal li.status::before { background: var(--waiting); }
 .journal .entry-head { font-size: 0.85rem; color: var(--muted); }
 .journal .kind { font-weight: 600; color: var(--text); }
+.pager { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0 16px; }
 form.stack { display: grid; gap: 10px; }
 label { font-weight: 600; font-size: 0.9rem; }
 input[type=text], input[type=url], input[type=password], select, textarea {

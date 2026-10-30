@@ -68,8 +68,9 @@ interface Config {
 export function loadConfig(env: Io["env"], opts: { url?: string; token?: string; requireToken?: boolean } = {}): Config {
   if (opts.url !== undefined && !opts.url.trim()) throw new CliError("--url must not be empty.");
   const url = (opts.url ?? env.DURA_URL)?.trim();
-  const token = (opts.token ?? env.DURA_TOKEN)?.trim() || undefined;
   const requireToken = opts.requireToken ?? true;
+  // Commands that need no token (guide) do not read one, so a malformed DURA_TOKEN cannot break them.
+  const token = requireToken ? (opts.token ?? env.DURA_TOKEN)?.trim() || undefined : undefined;
   const missing = [!url && "DURA_URL (or pass --url)", requireToken && !token && "DURA_TOKEN (or pass --token-file / --token-stdin)"].filter(Boolean);
   if (missing.length > 0) throw new CliError(`Set ${missing.join(" and ")}.`);
   // An invalid header value makes fetch throw with the value in its message, so reject it here without echoing it.

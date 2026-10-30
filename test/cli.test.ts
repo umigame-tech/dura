@@ -125,6 +125,7 @@ describe("cli", () => {
     expect(guide.code).toBe(0);
     expect(guide.stdout).toContain("# dura");
 
+    expect((await exec(["guide"], { env: { DURA_TOKEN: "dura_a\nb" } })).code).toBe(0);
     const revoked = await exec(["guide"], { env: { DURA_TOKEN: "dura_revoked" } });
     expect(revoked.code).toBe(0);
     expect(revoked.auth).toEqual([null]);

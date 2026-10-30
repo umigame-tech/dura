@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { CliError, run } from "./cli";
 
 async function readStdin(): Promise<string> {
-  if (process.stdin.isTTY) throw new CliError("Expected the body on stdin (pipe it in) or via --file.");
+  if (process.stdin.isTTY) throw new CliError("Expected input on stdin, but it is a terminal: pipe it in (or pass the body with --file).");
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks).toString("utf8");

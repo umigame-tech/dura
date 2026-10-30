@@ -78,6 +78,34 @@ describe("web UI", () => {
     expect(html).not.toContain("<script>alert(1)");
     expect(html).not.toContain('href="javascript:');
     expect(html).not.toContain("<img src=x");
+
+    // Browsers drop tabs and newlines inside a URL and control characters at its ends.
+    for (const href of ["<java\tscript:alert(4)>", "<java\nscript:alert(5)>", "\x01javascript:alert(6)"]) {
+      await call(t, "POST", "/api/states/x/journal", { body: `[bad](${href}) [ok](https://example.com/a?b=1)` });
+      const page = await (await get("/s/x")).text();
+      expect(page).not.toMatch(/href="[^"]*script:/i);
+      expect(page).toContain('href="https://example.com/a?b=1"');
+    }
+  });
+
+  it("only follows a same-site next after login", async () => {
+    const { app } = await setup();
+    const js = await (await app.request("/static/app.js")).text();
+    expect(js).toContain("location.href = sameSitePath(");
+    const source = /function sameSitePath[\s\S]*?\n}\n/.exec(js)![0];
+    const sameSitePath = new Function(`${source}; return sameSitePath;`)() as (next: string | null, origin: string) => string;
+    const origin = "https://dura.example";
+    expect(sameSitePath(null, origin)).toBe("/");
+    expect(sameSitePath("/s/x?section=goal#j3", origin)).toBe(`${origin}/s/x?section=goal#j3`);
+    expect(sameSitePath("/settings", origin)).toBe(`${origin}/settings`);
+    const outside = ["//evil.example", "/\\evil.example", "/\t/evil.example", "/\n/evil.example", "/\r/evil.example"];
+    for (const bad of [...outside, "javascript:alert(1)", "https://evil.example", "https://dura.example@evil.example"]) {
+      expect(sameSitePath(bad, origin)).toBe("/");
+    }
+    // Same origin, but the path normalizes to "//host", which location.href would read as another host.
+    for (const tricky of ["/.//evil.example", "/./\\evil.example", "/a/..//evil.example", "/%2e//evil.example", `${origin}//evil.example`]) {
+      expect(new URL(sameSitePath(tricky, origin), origin).origin).toBe(origin);
+    }
   });
 
   it("pages the journal newest first", async () => {

@@ -103,12 +103,12 @@ async function postJson(url, body) {
 }
 
 // Where to go after logging in. Parsed like the browser will ("/\\t/host", "/\\\\host" and "javascript:" leave the site),
-// and only a URL on this origin is followed.
+// and only a URL on this origin is followed. Returns the absolute URL: a path such as "/.//host" normalizes to "//host".
 function sameSitePath(next, origin) {
   if (!next) return "/";
   try {
     const url = new URL(next, origin);
-    return url.origin === origin ? url.pathname + url.search + url.hash : "/";
+    return url.origin === origin ? url.href : "/";
   } catch {
     return "/";
   }

@@ -96,10 +96,15 @@ describe("web UI", () => {
     const sameSitePath = new Function(`${source}; return sameSitePath;`)() as (next: string | null, origin: string) => string;
     const origin = "https://dura.example";
     expect(sameSitePath(null, origin)).toBe("/");
-    expect(sameSitePath("/s/x?section=goal#j3", origin)).toBe("/s/x?section=goal#j3");
-    expect(sameSitePath("/settings", origin)).toBe("/settings");
-    for (const bad of ["//evil.example", "/\\evil.example", "/\t/evil.example", "/\n/evil.example", "javascript:alert(1)", "https://evil.example"]) {
+    expect(sameSitePath("/s/x?section=goal#j3", origin)).toBe(`${origin}/s/x?section=goal#j3`);
+    expect(sameSitePath("/settings", origin)).toBe(`${origin}/settings`);
+    const outside = ["//evil.example", "/\\evil.example", "/\t/evil.example", "/\n/evil.example", "/\r/evil.example"];
+    for (const bad of [...outside, "javascript:alert(1)", "https://evil.example", "https://dura.example@evil.example"]) {
       expect(sameSitePath(bad, origin)).toBe("/");
+    }
+    // Same origin, but the path normalizes to "//host", which location.href would read as another host.
+    for (const tricky of ["/.//evil.example", "/./\\evil.example", "/a/..//evil.example", "/%2e//evil.example", `${origin}//evil.example`]) {
+      expect(new URL(sameSitePath(tricky, origin), origin).origin).toBe(origin);
     }
   });
 

@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { passkeys, pushSubscriptions } from "../src/db/schema";
 import type { Deps } from "../src/env";
+import { ICON } from "../src/routes/assets";
+import { SOURCE_ICON_SHA256 } from "../src/routes/icons";
 import { base64urlEncode } from "../src/lib/util";
 import { ORIGIN, setup } from "./helpers";
 
@@ -154,6 +157,33 @@ describe("web UI", () => {
   it("serves PWA assets", async () => {
     const { app } = await setup();
     expect((await app.request("/sw.js")).status).toBe(200);
-    expect((await (await app.request("/manifest.webmanifest")).json()).display).toBe("standalone");
+    const manifest = await (await app.request("/manifest.webmanifest")).json();
+    expect(manifest.display).toBe("standalone");
+
+    // Each PNG must exist and have the size it is declared with.
+    const pngs: [string, number][] = [
+      ...manifest.icons
+        .filter((i: { type: string }) => i.type === "image/png")
+        .map((i: { src: string; sizes: string }) => [i.src, Number(i.sizes.split("x")[0])]),
+      ["/apple-touch-icon.png", 180],
+      ["/badge-96.png", 96],
+    ];
+    expect(pngs.map(([path]) => path)).toContain("/icon-maskable-512.png");
+    for (const [path, size] of pngs) {
+      const res = await app.request(path);
+      expect(res.headers.get("Content-Type")).toBe("image/png");
+      const view = new DataView(await res.arrayBuffer());
+      expect(view.getUint32(0)).toBe(0x89504e47);
+      expect([view.getUint32(16), view.getUint32(20)]).toEqual([size, size]);
+    }
+
+    // Fails when ICON changed without rerunning scripts/render-icons.cjs.
+    expect(createHash("sha256").update(ICON).digest("hex")).toBe(SOURCE_ICON_SHA256);
+
+    const html = await (await app.request("/setup")).text();
+    expect(html).toContain('rel="apple-touch-icon" href="/apple-touch-icon.png"');
+    const sw = await (await app.request("/sw.js")).text();
+    expect(sw).toContain('icon: "/icon-192.png"');
+    expect(sw).toContain('badge: "/badge-96.png"');
   });
 });

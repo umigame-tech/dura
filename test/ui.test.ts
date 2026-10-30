@@ -164,6 +164,17 @@ describe("web UI", () => {
     expect(js).toContain('document.querySelector("[data-nav-toggle]")');
   });
 
+  it("versions the CSS and JS URLs so a cached copy is not paired with newer HTML", async () => {
+    const { app, get } = await loggedIn();
+    const home = await (await get("/")).text();
+    const css = /href="(\/static\/app\.css\?v=\w+)"/.exec(home)?.[1];
+    const js = /src="(\/static\/app\.js\?v=\w+)"/.exec(home)?.[1];
+    expect(css).toBeDefined();
+    expect(js).toBeDefined();
+    expect((await app.request(css!)).status).toBe(200);
+    expect(await (await app.request(js!)).text()).toContain("[data-nav-toggle]");
+  });
+
   it("shows a diff instead of overwriting on conflict", async () => {
     const { get, post } = await loggedIn();
     await post("/states", { title: "X", id: "x" });

@@ -2,6 +2,7 @@ import type { Child } from "hono/jsx";
 import { raw } from "hono/html";
 import type { StateStatus } from "../db/schema";
 import { lineDiff, renderMarkdown } from "../lib/markdown";
+import { ASSET_VERSION } from "../routes/assets";
 
 export function Layout(props: { title: string; loggedIn?: boolean; path?: string; navCollapsed?: boolean; children: Child }) {
   const inSettings = props.path === "/settings" || Boolean(props.path?.startsWith("/settings/"));
@@ -12,14 +13,14 @@ export function Layout(props: { title: string; loggedIn?: boolean; path?: string
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{props.title === "dura" ? "dura" : `${props.title} · dura`}</title>
-        <link rel="stylesheet" href="/static/app.css" />
+        <link rel="stylesheet" href={`/static/app.css?v=${ASSET_VERSION}`} />
         <link rel="manifest" href="/manifest.webmanifest" />
         <link rel="icon" href="/icon.svg" type="image/svg+xml" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="theme-color" content="#1f6f5c" />
         {/* Marks JS as available before the first paint, so the menu starts closed on a narrow screen without a flash. */}
         <script dangerouslySetInnerHTML={{ __html: 'document.documentElement.classList.add("js")' }} />
-        <script src="/static/app.js" defer></script>
+        <script src={`/static/app.js?v=${ASSET_VERSION}`} defer></script>
       </head>
       <body class={props.loggedIn && props.navCollapsed ? "nav-collapsed" : undefined}>
         <header class="top">

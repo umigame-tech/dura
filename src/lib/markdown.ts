@@ -6,10 +6,12 @@ export function escapeHtml(s: string): string {
 }
 
 // Content is written by agents, so raw HTML is shown as text and only safe URL schemes are linked.
+// Browsers drop tabs and newlines anywhere in a URL and control characters or spaces at its ends,
+// so "java\tscript:" is javascript:. Check the URL the browser will see.
 function safeUrl(href: string): string | null {
-  const trimmed = href.trim();
-  if (/^(https?:|mailto:)/i.test(trimmed) || /^[/#?.]/.test(trimmed) || !/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
-    return trimmed;
+  const url = href.replace(/[\t\n\r]/g, "").replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
+  if (/^(https?:|mailto:)/i.test(url) || /^[/#?.]/.test(url) || !/^[a-z][a-z0-9+.-]*:/i.test(url)) {
+    return url;
   }
   return null;
 }

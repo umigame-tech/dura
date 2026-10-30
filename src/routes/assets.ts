@@ -117,6 +117,18 @@ async function postJson(url, body) {
   return data;
 }
 
+// Where to go after logging in. Parsed like the browser will ("/\\t/host", "/\\\\host" and "javascript:" leave the site),
+// and only a URL on this origin is followed. Returns the absolute URL: a path such as "/.//host" normalizes to "//host".
+function sameSitePath(next, origin) {
+  if (!next) return "/";
+  try {
+    const url = new URL(next, origin);
+    return url.origin === origin ? url.href : "/";
+  } catch {
+    return "/";
+  }
+}
+
 function showError(el, err) {
   if (!el) return alert(err.message || err);
   el.textContent = err.message || String(err);
@@ -187,7 +199,7 @@ document.addEventListener("click", async (ev) => {
     const action = el.dataset.action;
     if (action === "login") {
       await loginWithPasskey();
-      location.href = new URLSearchParams(location.search).get("next") || "/";
+      location.href = sameSitePath(new URLSearchParams(location.search).get("next"), location.origin);
     } else if (action === "setup") {
       await registerPasskey({ setupToken: document.getElementById("setup-token").value, name: document.getElementById("passkey-name").value });
       location.href = "/";

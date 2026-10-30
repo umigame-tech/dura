@@ -7,7 +7,10 @@ async function cli() {
   const token = await ctx.tokenFor("cli-agent");
   await ctx.call(token, "POST", "/api/states", { id: "s", title: "S", sections: { tasks: "- [ ] a\n- [ ] b\n" } });
 
-  const exec = async (argv: string[], opts: { stdin?: string; env?: Record<string, string | undefined> } = {}) => {
+  const exec = async (
+    argv: string[],
+    opts: { stdin?: string; env?: Record<string, string | undefined>; files?: Record<string, string> } = {},
+  ) => {
     let stdout = "";
     let stderr = "";
     const urls: string[] = [];
@@ -20,7 +23,7 @@ async function cli() {
         return ctx.app.request(url, init) as unknown as Promise<Response>;
       },
       readStdin: async () => opts.stdin ?? "",
-      readFile: async (path) => `file:${path}`,
+      readFile: async (path) => opts.files?.[path] ?? `file:${path}`,
       stdout: (t) => (stdout += t),
       stderr: (t) => (stderr += t),
     };
@@ -130,6 +133,30 @@ describe("cli", () => {
     const show = await exec(["show"], { env: { DURA_TOKEN: undefined } });
     expect(show.code).toBe(2);
     expect(show.stderr).toContain("Set DURA_TOKEN in the environment.");
+  });
+
+  it("reads the token from --token-file or --token-stdin over DURA_TOKEN", async () => {
+    const { exec, token } = await cli();
+    const noEnv = { DURA_TOKEN: undefined };
+    const fromFile = await exec(["show", "--token-file", "/run/dura-token"], { env: noEnv, files: { "/run/dura-token": `${token}\n` } });
+    expect(fromFile.code).toBe(0);
+    expect(fromFile.auth).toEqual([`Bearer ${token}`]);
+
+    const fromStdin = await exec(["show", "--token-stdin"], { env: { DURA_TOKEN: "dura_other" }, stdin: `${token}\n` });
+    expect(fromStdin.code).toBe(0);
+    expect(fromStdin.auth).toEqual([`Bearer ${token}`]);
+
+    // The body cannot come from stdin too, but --file and message arguments still work.
+    const piped = await exec(["log", "--token-stdin"], { env: noEnv, stdin: token });
+    expect(piped.code).toBe(2);
+    expect(piped.stderr).toContain("pass the body with --file");
+    expect((await exec(["log", "--token-stdin", "done"], { env: noEnv, stdin: token })).code).toBe(0);
+    expect((await exec(["log", "--token-stdin", "--file", "r.md"], { env: noEnv, stdin: token })).code).toBe(0);
+
+    const both = await exec(["show", "--token-file", "t", "--token-stdin"], { stdin: token });
+    expect(both.stderr).toContain("either --token-file or --token-stdin");
+    expect((await exec(["show", "--token-file", "empty"], { files: { empty: "\n" } })).stderr).toContain("is empty");
+    expect((await exec(["show", "--token-stdin"], { stdin: "" })).stderr).toContain("empty token");
   });
 
   it("takes the server URL from --url over DURA_URL", async () => {

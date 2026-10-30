@@ -7,7 +7,9 @@ It has no dependencies and needs Node.js 20 or later.
 npm install -g @umigame-tech/dura
 ```
 
-Set the server and your token in the environment. The token is read only from `DURA_TOKEN`, never from a flag.
+Set the server and your token in the environment. The token is never taken as a flag value, so it stays out of shell history:
+use `DURA_TOKEN`, or `--token-file <path>` / `--token-stdin` to read it from a file or stdin.
+With `--token-stdin`, pass the body of `log` / `section put` with `--file` (or `log` message arguments).
 State commands use `DURA_STATE`, or `--state <id>`. `--url <url>` overrides `DURA_URL`.
 `dura guide` reads a public endpoint, so it works without `DURA_TOKEN`.
 

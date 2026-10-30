@@ -19,8 +19,9 @@ You receive these from your prompt or environment:
 The examples below use the \`dura\` CLI, which sends the bearer token for you.
 Keep the token in the environment; never print it or put it in source control.
 State commands use \`DURA_STATE\`; pass \`--state <id>\` to select another state.
-Pass \`--url <url>\` to use another server than \`DURA_URL\`. The token is read only from
-\`DURA_TOKEN\`, never from a flag, so it stays out of shell history.
+Pass \`--url <url>\` to use another server than \`DURA_URL\`. The token is never taken as a
+flag value, so it stays out of shell history: use \`DURA_TOKEN\`, or read it with
+\`--token-file <path>\` or \`--token-stdin\` (then pass a body with \`--file\`).
 If a required variable is missing, ask for configuration rather than guessing a state.
 
 \`dura guide\` needs only the URL; every other command also needs \`DURA_TOKEN\`.

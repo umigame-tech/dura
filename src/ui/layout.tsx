@@ -17,12 +17,14 @@ export function Layout(props: { title: string; loggedIn?: boolean; path?: string
         <link rel="icon" href="/icon.svg" type="image/svg+xml" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="theme-color" content="#1f6f5c" />
+        {/* Marks JS as available before the first paint, so the menu starts closed on a narrow screen without a flash. */}
+        <script dangerouslySetInnerHTML={{ __html: 'document.documentElement.classList.add("js")' }} />
         <script src="/static/app.js" defer></script>
       </head>
       <body class={props.loggedIn && props.navCollapsed ? "nav-collapsed" : undefined}>
         <header class="top">
           {props.loggedIn && (
-            // Without JS the CSS hides this button and always shows the menu.
+            // Shown only with JS (html.js); without it the menu is always shown.
             <button type="button" class="nav-toggle" aria-controls="sidenav" aria-label="Menu" data-nav-toggle>
               <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                 <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />

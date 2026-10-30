@@ -2,7 +2,8 @@ import { eq } from "drizzle-orm";
 import type { DB } from "./db";
 import { pushSubscriptions, settings, webhooks, type StateStatus, type WebhookKind } from "./db/schema";
 import type { Deps } from "./env";
-import { generateVapidKeys, sendPush, type VapidKeys } from "./lib/webpush";
+import { nowIso } from "./lib/util";
+import { generateVapidKeys, sendPush, type PushTarget, type VapidKeys } from "./lib/webpush";
 import type { State } from "./store";
 
 /** Status changes that wake up the human. */
@@ -73,6 +74,36 @@ function encodeHeader(s: string): string {
   return `=?UTF-8?B?${b64}?=`;
 }
 
+/**
+ * Send one push and return the push service's HTTP status.
+ * A subscription the service reports as gone (404 / 410) is removed.
+ */
+export async function pushTo(deps: Deps, sub: PushTarget, n: Notification, keys?: VapidKeys): Promise<number> {
+  const { db } = deps;
+  const subject = deps.config.vapidSubject || new URL(n.url).origin;
+  const status = await sendPush(sub, n, keys ?? (await getVapidKeys(db)), subject, deps.fetch ?? fetch);
+  if (status === 404 || status === 410) {
+    await db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, sub.endpoint));
+  } else if (status >= 400) {
+    console.warn(`dura: push to ${new URL(sub.endpoint).host} failed with HTTP ${status}`);
+  }
+  return status;
+}
+
+/** A sample notification for the Test buttons in the settings. */
+export function testNotification(origin: string, actor: string): Notification {
+  const sample: State = {
+    id: "example",
+    title: "Test notification",
+    status: "waiting",
+    statusNote: "This is a test notification from dura.",
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+  // Tapping it opens the settings, where the Test button was pressed; the sample state does not exist.
+  return { ...buildNotification(sample, "active", actor, origin), url: `${origin}/settings` };
+}
+
 /** Fan out to every push subscription and webhook. Never throws; failures are logged. */
 export async function deliver(deps: Deps, n: Notification): Promise<void> {
   const { db } = deps;
@@ -82,18 +113,7 @@ export async function deliver(deps: Deps, n: Notification): Promise<void> {
   const subs = await db.select().from(pushSubscriptions);
   if (subs.length > 0) {
     const keys = await getVapidKeys(db);
-    const subject = deps.config.vapidSubject || new URL(n.url).origin;
-    for (const sub of subs) {
-      jobs.push(
-        sendPush(sub, n, keys, subject, fetchImpl).then(async (status) => {
-          if (status === 404 || status === 410) {
-            await db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, sub.endpoint));
-          } else if (status >= 400) {
-            console.warn(`dura: push to ${new URL(sub.endpoint).host} failed with HTTP ${status}`);
-          }
-        }),
-      );
-    }
+    for (const sub of subs) jobs.push(pushTo(deps, sub, n, keys));
   }
 
   for (const hook of await db.select().from(webhooks)) {

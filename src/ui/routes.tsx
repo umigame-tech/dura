@@ -6,7 +6,7 @@ import type { AppEnv } from "../env";
 import { ApiError } from "../lib/errors";
 import { renderMarkdown } from "../lib/markdown";
 import { nowIso, randomToken } from "../lib/util";
-import { buildNotification, getVapidKeys, notifyStatusChange, webhookRequest } from "../notify";
+import { getVapidKeys, notifyStatusChange, pushTo, testNotification, webhookRequest } from "../notify";
 import { passkeyCount } from "../routes/webauthn";
 import {
   appendJournal,
@@ -553,7 +553,13 @@ async function settingsPage(c: Context<AppEnv>, flash?: { kind: "ok" | "error"; 
                   {new URL(s.endpoint).host}
                   <div class="muted">{s.label}</div>
                 </td>
-                <td>
+                <td class="row">
+                  <form method="post" action="/settings/push/test">
+                    <input type="hidden" name="endpoint" value={s.endpoint} />
+                    <button class="secondary" type="submit">
+                      Test
+                    </button>
+                  </form>
                   <form method="post" action="/settings/push/delete">
                     <input type="hidden" name="endpoint" value={s.endpoint} />
                     <button class="danger" type="submit">
@@ -744,18 +750,8 @@ ui.post("/settings/webhooks/:id/test", async (c) => {
   const deps = c.get("deps");
   const [hook] = await deps.db.select().from(webhooks).where(eq(webhooks.id, c.req.param("id")));
   if (!hook) return c.redirect("/settings");
-  const sample: State = {
-    id: "example",
-    title: "Test notification",
-    status: "waiting",
-    statusNote: "This is a test notification from dura.",
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-  };
   try {
-    const res = await (deps.fetch ?? fetch)(
-      webhookRequest(hook.kind, hook.url, buildNotification(sample, "active", HUMAN_ACTOR, publicOrigin(c))),
-    );
+    const res = await (deps.fetch ?? fetch)(webhookRequest(hook.kind, hook.url, testNotification(publicOrigin(c), HUMAN_ACTOR)));
     return settingsPage(c, {
       kind: res.ok ? "ok" : "error",
       text: res.ok ? `Sent a test to "${hook.name}".` : `"${hook.name}" responded with HTTP ${res.status}.`,
@@ -769,6 +765,29 @@ ui.post("/settings/push/delete", async (c) => {
   const f = await form(c);
   await c.get("deps").db.delete(pushSubscriptions).where(eq(pushSubscriptions.endpoint, f.endpoint ?? ""));
   return c.redirect("/settings");
+});
+
+ui.post("/settings/push/test", async (c) => {
+  const f = await form(c);
+  const deps = c.get("deps");
+  const [sub] = await deps.db.select().from(pushSubscriptions).where(eq(pushSubscriptions.endpoint, f.endpoint ?? ""));
+  if (!sub) return c.redirect("/settings");
+  const host = new URL(sub.endpoint).host;
+  try {
+    const status = await pushTo(deps, sub, testNotification(publicOrigin(c), HUMAN_ACTOR));
+    if (status === 404 || status === 410) {
+      return settingsPage(c, {
+        kind: "error",
+        text: `${host} says this subscription has expired, so it was removed. Enable push on that device again.`,
+      });
+    }
+    return settingsPage(c, {
+      kind: status < 400 ? "ok" : "error",
+      text: status < 400 ? `Sent a test to ${host}.` : `${host} responded with HTTP ${status}.`,
+    });
+  } catch (err) {
+    return settingsPage(c, { kind: "error", text: `Could not reach ${host}: ${(err as Error).message}` });
+  }
 });
 
 ui.get("/push/key", async (c) => c.json({ publicKey: (await getVapidKeys(c.get("deps").db)).publicKey }));

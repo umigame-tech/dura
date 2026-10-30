@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { passkeys } from "../src/db/schema";
+import { passkeys, pushSubscriptions } from "../src/db/schema";
+import type { Deps } from "../src/env";
+import { base64urlEncode } from "../src/lib/util";
 import { ORIGIN, setup } from "./helpers";
 
-async function loggedIn() {
-  const ctx = await setup();
+async function loggedIn(overrides: Partial<Deps> = {}) {
+  const ctx = await setup(overrides);
   await ctx.db.insert(passkeys).values({ id: "cred", name: "laptop", publicKey: "x" });
   const cookie = await ctx.ownerCookie();
   const get = (path: string) => ctx.app.request(path, { headers: { Cookie: cookie } });
@@ -100,6 +102,39 @@ describe("web UI", () => {
     const secret = /dura_[A-Za-z0-9_-]+/.exec(html)![0];
     const res = await call(secret, "POST", "/api/states/x/journal", { kind: "report", body: "done" });
     expect((await res.json()).entry.actor).toBe("codex");
+  });
+
+  it("sends a test push to one device", async () => {
+    const requests: Request[] = [];
+    const fakeFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const req = new Request(input, init);
+      requests.push(req);
+      return new Response(null, { status: req.url.includes("gone") ? 410 : 201 });
+    }) as typeof fetch;
+    const { db, post, get } = await loggedIn({ fetch: fakeFetch });
+    const pair = (await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])) as CryptoKeyPair;
+    const keys = {
+      p256dh: base64urlEncode((await crypto.subtle.exportKey("raw", pair.publicKey)) as ArrayBuffer),
+      auth: base64urlEncode(crypto.getRandomValues(new Uint8Array(16))),
+    };
+    await db.insert(pushSubscriptions).values([
+      { endpoint: "https://push.example.com/live", ...keys },
+      { endpoint: "https://push.example.com/gone", ...keys },
+    ]);
+    expect(await (await get("/settings")).text()).toContain('action="/settings/push/test"');
+
+    const ok = await (await post("/settings/push/test", { endpoint: "https://push.example.com/live" })).text();
+    expect(ok).toContain("Sent a test to push.example.com.");
+    expect(requests.map((r) => r.url)).toEqual(["https://push.example.com/live"]);
+    expect(requests[0]!.headers.get("Content-Encoding")).toBe("aes128gcm");
+
+    const gone = await post("/settings/push/test", { endpoint: "https://push.example.com/gone" });
+    expect(gone.status).toBe(400);
+    expect(await gone.text()).toContain("subscription has expired, so it was removed");
+    const subs = await db.select().from(pushSubscriptions);
+    expect(subs.map((s) => s.endpoint)).toEqual(["https://push.example.com/live"]);
+
+    expect((await post("/settings/push/test", { endpoint: "https://push.example.com/unknown" })).headers.get("Location")).toBe("/settings");
   });
 
   it("routes the new-section form to the editor", async () => {

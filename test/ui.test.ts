@@ -1,6 +1,9 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { passkeys, pushSubscriptions } from "../src/db/schema";
 import type { Deps } from "../src/env";
+import { ICON } from "../src/routes/assets";
+import { SOURCE_ICON_SHA256 } from "../src/routes/icons";
 import { base64urlEncode } from "../src/lib/util";
 import { ORIGIN, setup } from "./helpers";
 
@@ -173,6 +176,9 @@ describe("web UI", () => {
       expect(view.getUint32(0)).toBe(0x89504e47);
       expect([view.getUint32(16), view.getUint32(20)]).toEqual([size, size]);
     }
+
+    // Fails when ICON changed without rerunning scripts/render-icons.cjs.
+    expect(createHash("sha256").update(ICON).digest("hex")).toBe(SOURCE_ICON_SHA256);
 
     const html = await (await app.request("/setup")).text();
     expect(html).toContain('rel="apple-touch-icon" href="/apple-touch-icon.png"');

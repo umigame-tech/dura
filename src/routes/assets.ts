@@ -4,7 +4,7 @@ import { APPLE_TOUCH_ICON, BADGE_96, ICON_192, ICON_512, ICON_MASKABLE_512 } fro
 
 export const assets = new Hono<AppEnv>();
 
-const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1f6f5c"/><path d="M18 16h14c11 0 18 6.5 18 16s-7 16-18 16H18z" fill="none" stroke="#fff" stroke-width="6" stroke-linejoin="round"/><circle cx="32" cy="32" r="5" fill="#f4c95d"/></svg>`;
+export const ICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1f6f5c"/><path d="M18 16h14c11 0 18 6.5 18 16s-7 16-18 16H18z" fill="none" stroke="#fff" stroke-width="6" stroke-linejoin="round"/><circle cx="32" cy="32" r="5" fill="#f4c95d"/></svg>`;
 
 const CSS = `
 :root {

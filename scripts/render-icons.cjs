@@ -8,7 +8,9 @@ const path = require("node:path");
 const { chromium } = require("playwright");
 
 const assets = fs.readFileSync(path.join(__dirname, "../src/routes/assets.ts"), "utf8");
-const icon = assets.match(/const ICON = `(<svg[\s\S]*?<\/svg>)`;/)[1];
+// Evaluate the template literal so that the hash below matches the runtime value
+// of ICON that the test hashes, even if the source contains escapes.
+const icon = new Function(`return \`${assets.match(/const ICON = `(<svg[\s\S]*?<\/svg>)`;/)[1]}\`;`)();
 const background = icon.match(/<rect [^>]*\/>/)[0];
 // apple-touch and maskable icons are full-bleed squares; the badge is the mark alone
 // in white, since Android uses only its alpha channel.

@@ -26,10 +26,11 @@ Commands:
   log [message...]              Append to the journal (message from args, stdin or --file)
   journal                       Print journal entries after --after
   status <status>               Set the status: ${STATUSES.join(" | ")}
-  guide                         Print the usage guide served by the server
+  guide                         Print the usage guide served by the server (no token needed)
 
 Options:
   -s, --state <id>              State id (default: $DURA_STATE)
+      --url <url>               Server URL (default: $DURA_URL)
       --after <seq>             show / journal: only entries after this seq
       --limit <n>               show / journal: at most n entries
       --version <n>             section put / replace: the version you read
@@ -54,19 +55,23 @@ export class CliError extends Error {}
 
 interface Config {
   url: string;
-  token: string;
+  /** Absent only for commands that read public endpoints (guide). */
+  token?: string;
 }
 
-/** Reads DURA_URL and DURA_TOKEN. The token is never taken from flags so it stays out of shell history. */
-export function loadConfig(env: Io["env"]): Config {
-  const url = env.DURA_URL?.trim();
-  const token = env.DURA_TOKEN?.trim();
-  const missing = [!url && "DURA_URL", !token && "DURA_TOKEN"].filter(Boolean);
-  if (missing.length > 0) {
-    throw new CliError(`${missing.join(" and ")} must be set in the environment.`);
-  }
-  if (!/^https?:\/\//.test(url!)) throw new CliError(`DURA_URL must start with http:// or https:// (got ${url}).`);
-  return { url: url!.replace(/\/+$/, ""), token: token! };
+/**
+ * Reads the server URL (--url, else DURA_URL) and DURA_TOKEN. The token is never taken from flags
+ * so it stays out of shell history.
+ */
+export function loadConfig(env: Io["env"], opts: { url?: string; requireToken?: boolean } = {}): Config {
+  const url = (opts.url ?? env.DURA_URL)?.trim();
+  const token = env.DURA_TOKEN?.trim() || undefined;
+  const requireToken = opts.requireToken ?? true;
+  const missing = [!url && "DURA_URL (or pass --url)", requireToken && !token && "DURA_TOKEN"].filter(Boolean);
+  if (missing.length > 0) throw new CliError(`Set ${missing.join(" and ")} in the environment.`);
+  const source = opts.url !== undefined ? "--url" : "DURA_URL";
+  if (!/^https?:\/\//.test(url!)) throw new CliError(`${source} must start with http:// or https:// (got ${url}).`);
+  return { url: url!.replace(/\/+$/, ""), token };
 }
 
 function intOption(value: string | undefined, name: string): number | undefined {
@@ -99,7 +104,7 @@ class Client {
       res = await this.io.fetch(url, {
         method,
         body: init.body,
-        headers: { Authorization: `Bearer ${this.config.token}`, ...init.headers },
+        headers: { ...(this.config.token ? { Authorization: `Bearer ${this.config.token}` } : {}), ...init.headers },
       });
     } catch (err) {
       const cause = err instanceof Error ? ((err.cause as Error | undefined)?.message ?? err.message) : String(err);
@@ -160,6 +165,7 @@ const MD = { Accept: "text/markdown" };
 
 const OPTIONS = {
   state: { type: "string", short: "s" },
+  url: { type: "string" },
   after: { type: "string" },
   limit: { type: "string" },
   version: { type: "string" },
@@ -213,7 +219,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
 
   const ctx: { command: string; name?: string; stateId?: string } = { command };
   try {
-    const client = new Client(loadConfig(io.env), io);
+    // guide reads a public endpoint, so it never sends the token (a revoked one would make it fail).
+    const config = loadConfig(io.env, { url: opts.url, requireToken: command !== "guide" });
+    const client = new Client(command === "guide" ? { url: config.url } : config, io);
     const stateId = () => {
       const id = (opts.state ?? io.env.DURA_STATE)?.trim();
       if (!id) throw new CliError("No state given. Pass --state <id> or set DURA_STATE.");

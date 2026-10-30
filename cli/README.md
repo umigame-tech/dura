@@ -8,7 +8,8 @@ npm install -g @umigame-tech/dura
 ```
 
 Set the server and your token in the environment. The token is read only from `DURA_TOKEN`, never from a flag.
-State commands use `DURA_STATE`, or `--state <id>`.
+State commands use `DURA_STATE`, or `--state <id>`. `--url <url>` overrides `DURA_URL`.
+`dura guide` reads a public endpoint, so it works without `DURA_TOKEN`.
 
 ```bash
 export DURA_URL=https://dura.example.com DURA_TOKEN=... DURA_STATE=search-rewrite

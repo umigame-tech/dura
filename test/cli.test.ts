@@ -10,16 +10,17 @@ async function cli() {
   const exec = async (argv: string[], opts: { stdin?: string; env?: Record<string, string | undefined> } = {}) => {
     let stdout = "";
     let stderr = "";
+    const urls: string[] = [];
     const io: Io = {
       env: { DURA_URL: "http://localhost/", DURA_TOKEN: token, DURA_STATE: "s", ...opts.env },
-      fetch: (url, init) => ctx.app.request(url, init) as unknown as Promise<Response>,
+      fetch: (url, init) => (urls.push(url), ctx.app.request(url, init) as unknown as Promise<Response>),
       readStdin: async () => opts.stdin ?? "",
       readFile: async (path) => `file:${path}`,
       stdout: (t) => (stdout += t),
       stderr: (t) => (stderr += t),
     };
     const code = await run(argv, io);
-    return { code, stdout, stderr };
+    return { code, stdout, stderr, urls };
   };
   return { ...ctx, token, exec };
 }
@@ -29,7 +30,7 @@ describe("cli", () => {
     const { exec } = await cli();
     const missing = await exec(["show"], { env: { DURA_URL: undefined, DURA_TOKEN: undefined } });
     expect(missing.code).toBe(2);
-    expect(missing.stderr).toContain("DURA_URL and DURA_TOKEN must be set");
+    expect(missing.stderr).toContain("Set DURA_URL (or pass --url) and DURA_TOKEN in the environment.");
 
     const noState = await exec(["show"], { env: { DURA_STATE: undefined } });
     expect(noState.code).toBe(2);
@@ -108,5 +109,34 @@ describe("cli", () => {
     expect((await exec(["frobnicate"])).stderr).toContain("Unknown command");
     expect((await exec(["guide"])).stdout).toContain("# dura");
     expect((await exec(["guide", "--json"])).stderr).toContain("only available as Markdown");
+  });
+
+  it("reads the guide without a token, and nothing else", async () => {
+    const { exec } = await cli();
+    const guide = await exec(["guide"], { env: { DURA_TOKEN: undefined } });
+    expect(guide.code).toBe(0);
+    expect(guide.stdout).toContain("# dura");
+
+    expect((await exec(["guide"], { env: { DURA_TOKEN: "dura_revoked" } })).code).toBe(0);
+
+    const show = await exec(["show"], { env: { DURA_TOKEN: undefined } });
+    expect(show.code).toBe(2);
+    expect(show.stderr).toContain("Set DURA_TOKEN in the environment.");
+  });
+
+  it("takes the server URL from --url over DURA_URL", async () => {
+    const { exec } = await cli();
+    const fromFlag = await exec(["show", "--url", "https://flag.example/"], { env: { DURA_URL: "https://env.example" } });
+    expect(fromFlag.code).toBe(0);
+    expect(fromFlag.stdout).toContain("## Section: tasks");
+    expect(fromFlag.urls).toEqual(["https://flag.example/api/states/s"]);
+
+    const noEnv = await exec(["show", "--url", "https://flag.example"], { env: { DURA_URL: undefined } });
+    expect(noEnv.code).toBe(0);
+    expect((await exec(["show"], { env: { DURA_URL: "https://env.example" } })).urls).toEqual(["https://env.example/api/states/s"]);
+
+    const bad = await exec(["show", "--url", "localhost"]);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain("--url must start with http:// or https://");
   });
 });

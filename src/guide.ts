@@ -19,10 +19,12 @@ You receive these from your prompt or environment:
 The examples below use the \`dura\` CLI, which sends the bearer token for you.
 Keep the token in the environment; never print it or put it in source control.
 State commands use \`DURA_STATE\`; pass \`--state <id>\` to select another state.
+Pass \`--url <url>\` to use another server than \`DURA_URL\`. The token is read only from
+\`DURA_TOKEN\`, never from a flag, so it stays out of shell history.
 If a required variable is missing, ask for configuration rather than guessing a state.
 
-The CLI currently requires both \`DURA_URL\` and \`DURA_TOKEN\`, including for
-\`dura guide\`. If the CLI or token is unavailable, read this public endpoint:
+\`dura guide\` needs only the URL; every other command also needs \`DURA_TOKEN\`.
+If the CLI is unavailable, read this public endpoint:
 
     curl -fsS "$DURA_URL/api/guide"
 

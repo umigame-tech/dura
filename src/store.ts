@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, max, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, max, sql } from "drizzle-orm";
 import type { DB } from "./db";
 import { journalEntries, sectionRevisions, sections, states, type StateStatus } from "./db/schema";
 import { ApiError, badRequest, isUniqueViolation, notFound } from "./lib/errors";
@@ -280,15 +280,26 @@ export async function listJournal(
     .limit(limit);
 }
 
-/** The newest `limit` entries, in chronological order. */
-export async function tailJournal(db: DB, stateId: string, limit: number): Promise<JournalEntry[]> {
-  const rows = await db
+/** A page of entries, newest first, for the web UI. The REST API keeps the oldest-first `listJournal`. */
+// Offset paging shifts when entries are appended while someone is paging, so an entry can show on two pages.
+// The UI pages by number (?jpage=), which is fine for reading; a seq cursor (seq < before) would avoid the shift.
+export async function journalPage(
+  db: DB,
+  stateId: string,
+  opts: { limit: number; offset: number },
+): Promise<JournalEntry[]> {
+  return db
     .select()
     .from(journalEntries)
     .where(eq(journalEntries.stateId, stateId))
     .orderBy(desc(journalEntries.seq))
-    .limit(limit);
-  return rows.reverse();
+    .limit(opts.limit)
+    .offset(opts.offset);
+}
+
+export async function countJournal(db: DB, stateId: string): Promise<number> {
+  const [row] = await db.select({ n: count() }).from(journalEntries).where(eq(journalEntries.stateId, stateId));
+  return row?.n ?? 0;
 }
 
 export async function lastJournalSeq(db: DB, stateId: string): Promise<number> {

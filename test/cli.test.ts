@@ -38,7 +38,7 @@ describe("cli", () => {
     const { exec } = await cli();
     const missing = await exec(["show"], { env: { DURA_URL: undefined, DURA_TOKEN: undefined } });
     expect(missing.code).toBe(2);
-    expect(missing.stderr).toContain("Set DURA_URL (or pass --url) and DURA_TOKEN in the environment.");
+    expect(missing.stderr).toContain("Set DURA_URL (or pass --url) and DURA_TOKEN (or pass --token-file / --token-stdin).");
 
     const noState = await exec(["show"], { env: { DURA_STATE: undefined } });
     expect(noState.code).toBe(2);
@@ -132,13 +132,16 @@ describe("cli", () => {
 
     const show = await exec(["show"], { env: { DURA_TOKEN: undefined } });
     expect(show.code).toBe(2);
-    expect(show.stderr).toContain("Set DURA_TOKEN in the environment.");
+    expect(show.stderr).toContain("Set DURA_TOKEN (or pass --token-file / --token-stdin).");
   });
 
   it("reads the token from --token-file or --token-stdin over DURA_TOKEN", async () => {
     const { exec, token } = await cli();
     const noEnv = { DURA_TOKEN: undefined };
-    const fromFile = await exec(["show", "--token-file", "/run/dura-token"], { env: noEnv, files: { "/run/dura-token": `${token}\n` } });
+    const fromFile = await exec(["show", "--token-file", "/run/dura-token"], {
+      env: { DURA_TOKEN: "dura_other" },
+      files: { "/run/dura-token": `${token}\r\n` },
+    });
     expect(fromFile.code).toBe(0);
     expect(fromFile.auth).toEqual([`Bearer ${token}`]);
 
@@ -150,8 +153,25 @@ describe("cli", () => {
     const piped = await exec(["log", "--token-stdin"], { env: noEnv, stdin: token });
     expect(piped.code).toBe(2);
     expect(piped.stderr).toContain("pass the body with --file");
-    expect((await exec(["log", "--token-stdin", "done"], { env: noEnv, stdin: token })).code).toBe(0);
+    expect((await exec(["section", "put", "plan", "--token-stdin"], { env: noEnv, stdin: token })).stderr).toContain("--file");
+    const logged = await exec(["log", "--token-stdin", "done-by-arg"], { env: noEnv, stdin: token });
+    expect(logged.auth).toEqual([`Bearer ${token}`]);
     expect((await exec(["log", "--token-stdin", "--file", "r.md"], { env: noEnv, stdin: token })).code).toBe(0);
+    const journal = (await exec(["journal"])).stdout;
+    expect(journal).toContain("done-by-arg");
+    expect(journal).toContain("file:r.md");
+    expect((await exec(["section", "replace", "tasks", "--token-stdin", "--version", "1", "--old", "- [ ] a", "--new", "- [x] a"], { env: noEnv, stdin: token })).code).toBe(0);
+
+    // guide neither reads nor needs a token, whatever is passed.
+    expect((await exec(["guide", "--token-stdin"], { env: noEnv, stdin: "" })).code).toBe(0);
+    expect((await exec(["guide", "--token-file", "/missing"], { env: noEnv })).urls).toEqual(["http://localhost/api/guide"]);
+
+    // A malformed token is rejected before it reaches a header, and never echoed.
+    const multiline = await exec(["show", "--token-file", "t"], { files: { t: "dura_secret_one\ndura_secret_two" } });
+    expect(multiline.code).toBe(2);
+    expect(multiline.stderr).toContain("line breaks");
+    expect(multiline.stderr).not.toContain("dura_secret");
+    expect(multiline.urls).toEqual([]);
 
     const both = await exec(["show", "--token-file", "t", "--token-stdin"], { stdin: token });
     expect(both.stderr).toContain("either --token-file or --token-stdin");

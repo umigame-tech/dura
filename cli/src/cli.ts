@@ -70,8 +70,10 @@ export function loadConfig(env: Io["env"], opts: { url?: string; token?: string;
   const url = (opts.url ?? env.DURA_URL)?.trim();
   const token = (opts.token ?? env.DURA_TOKEN)?.trim() || undefined;
   const requireToken = opts.requireToken ?? true;
-  const missing = [!url && "DURA_URL (or pass --url)", requireToken && !token && "DURA_TOKEN"].filter(Boolean);
-  if (missing.length > 0) throw new CliError(`Set ${missing.join(" and ")} in the environment.`);
+  const missing = [!url && "DURA_URL (or pass --url)", requireToken && !token && "DURA_TOKEN (or pass --token-file / --token-stdin)"].filter(Boolean);
+  if (missing.length > 0) throw new CliError(`Set ${missing.join(" and ")}.`);
+  // An invalid header value makes fetch throw with the value in its message, so reject it here without echoing it.
+  if (token && !/^[\x21-\x7e]+$/.test(token)) throw new CliError("The token contains spaces, line breaks or non-ASCII characters.");
   const source = opts.url !== undefined ? "--url" : "DURA_URL";
   if (!/^https?:\/\//.test(url!)) throw new CliError(`${source} must start with http:// or https:// (got ${url}).`);
   return { url: url!.replace(/\/+$/, ""), token };
@@ -154,7 +156,7 @@ function hint(err: ResponseError, ctx: { command: string; name?: string; stateId
     case "old_not_unique":
       return `Run \`${get}\` and copy the text to replace exactly, with enough surrounding text to be unique (or pass --all).`;
     case "unauthorized":
-      return "Check DURA_TOKEN: it may be missing, mistyped or revoked.";
+      return "Check the token (DURA_TOKEN, --token-file or --token-stdin): it may be missing, mistyped or revoked.";
     case "forbidden":
       return "The token lacks the permission (read-only, or limited to other states).";
     case "not_found":
@@ -228,7 +230,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
       throw new CliError("Pass either --token-file or --token-stdin, not both.");
     }
     let token: string | undefined;
-    if (opts["token-file"] !== undefined) {
+    if (command === "guide") {
+      // guide never sends a token, so it does not read one either.
+    } else if (opts["token-file"] !== undefined) {
       token = (await io.readFile(opts["token-file"])).trim();
       if (!token) throw new CliError(`The token file ${opts["token-file"]} is empty.`);
     } else if (opts["token-stdin"]) {

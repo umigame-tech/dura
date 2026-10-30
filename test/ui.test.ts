@@ -156,11 +156,28 @@ describe("web UI", () => {
     expect((await app.request("/sw.js")).status).toBe(200);
     const manifest = await (await app.request("/manifest.webmanifest")).json();
     expect(manifest.display).toBe("standalone");
-    const paths = [...manifest.icons.map((i: { src: string }) => i.src), "/apple-touch-icon.png", "/badge-96.png"];
-    for (const path of paths.filter((p) => p.endsWith(".png"))) {
+
+    // Each PNG must exist and have the size it is declared with.
+    const pngs: [string, number][] = [
+      ...manifest.icons
+        .filter((i: { type: string }) => i.type === "image/png")
+        .map((i: { src: string; sizes: string }) => [i.src, Number(i.sizes.split("x")[0])]),
+      ["/apple-touch-icon.png", 180],
+      ["/badge-96.png", 96],
+    ];
+    expect(pngs.map(([path]) => path)).toContain("/icon-maskable-512.png");
+    for (const [path, size] of pngs) {
       const res = await app.request(path);
       expect(res.headers.get("Content-Type")).toBe("image/png");
-      expect([...new Uint8Array(await res.arrayBuffer()).slice(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+      const view = new DataView(await res.arrayBuffer());
+      expect(view.getUint32(0)).toBe(0x89504e47);
+      expect([view.getUint32(16), view.getUint32(20)]).toEqual([size, size]);
     }
+
+    const html = await (await app.request("/setup")).text();
+    expect(html).toContain('rel="apple-touch-icon" href="/apple-touch-icon.png"');
+    const sw = await (await app.request("/sw.js")).text();
+    expect(sw).toContain('icon: "/icon-192.png"');
+    expect(sw).toContain('badge: "/badge-96.png"');
   });
 });

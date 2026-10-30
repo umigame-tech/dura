@@ -181,6 +181,8 @@ describe("web UI", () => {
     // A change to either file gives a new version.
     expect(contentVersion(cssBody + " ", jsBody)).not.toBe(ASSET_VERSION);
     expect(contentVersion(cssBody, jsBody + " ")).not.toBe(ASSET_VERSION);
+    expect(contentVersion("ab", "c")).not.toBe(contentVersion("a", "bc"));
+    expect(contentVersion("😀")).not.toBe(contentVersion("😁"));
   });
 
   it("shows a diff instead of overwriting on conflict", async () => {

@@ -172,7 +172,9 @@ document.addEventListener("click", async (ev) => {
     const action = el.dataset.action;
     if (action === "login") {
       await loginWithPasskey();
-      location.href = new URLSearchParams(location.search).get("next") || "/";
+      const next = new URLSearchParams(location.search).get("next");
+      // Only a path on this site: "//host", "/\\host" and "javascript:" would leave it or run script.
+      location.href = next && /^\\/(?![/\\\\])/.test(next) ? next : "/";
     } else if (action === "setup") {
       await registerPasskey({ setupToken: document.getElementById("setup-token").value, name: document.getElementById("passkey-name").value });
       location.href = "/";

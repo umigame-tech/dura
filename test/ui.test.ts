@@ -78,6 +78,25 @@ describe("web UI", () => {
     expect(html).not.toContain("<script>alert(1)");
     expect(html).not.toContain('href="javascript:');
     expect(html).not.toContain("<img src=x");
+
+    // Browsers drop tabs and newlines inside a URL and control characters at its ends.
+    for (const href of ["<java\tscript:alert(4)>", "<java\nscript:alert(5)>", "\x01javascript:alert(6)"]) {
+      await call(t, "POST", "/api/states/x/journal", { body: `[bad](${href}) [ok](https://example.com/a?b=1)` });
+      const page = await (await get("/s/x")).text();
+      expect(page).not.toMatch(/href="[^"]*script:/i);
+      expect(page).toContain('href="https://example.com/a?b=1"');
+    }
+  });
+
+  it("only follows a same-site next after login", async () => {
+    const { app } = await setup();
+    const js = await (await app.request("/static/app.js")).text();
+    const source = /location\.href = next && (\/.+\/)\.test\(next\)/.exec(js)![1];
+    const sameSite = new Function(`return ${source}`)() as RegExp;
+    for (const ok of ["/", "/s/x?section=goal", "/settings"]) expect(sameSite.test(ok)).toBe(true);
+    for (const bad of ["//evil.example", "/\\evil.example", "javascript:alert(1)", "https://evil.example"]) {
+      expect(sameSite.test(bad)).toBe(false);
+    }
   });
 
   it("shows a diff instead of overwriting on conflict", async () => {

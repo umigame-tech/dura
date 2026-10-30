@@ -11,16 +11,21 @@ async function cli() {
     let stdout = "";
     let stderr = "";
     const urls: string[] = [];
+    const auth: (string | null)[] = [];
     const io: Io = {
       env: { DURA_URL: "http://localhost/", DURA_TOKEN: token, DURA_STATE: "s", ...opts.env },
-      fetch: (url, init) => (urls.push(url), ctx.app.request(url, init) as unknown as Promise<Response>),
+      fetch: (url, init) => {
+        urls.push(url);
+        auth.push(new Headers(init.headers).get("Authorization"));
+        return ctx.app.request(url, init) as unknown as Promise<Response>;
+      },
       readStdin: async () => opts.stdin ?? "",
       readFile: async (path) => `file:${path}`,
       stdout: (t) => (stdout += t),
       stderr: (t) => (stderr += t),
     };
     const code = await run(argv, io);
-    return { code, stdout, stderr, urls };
+    return { code, stdout, stderr, urls, auth };
   };
   return { ...ctx, token, exec };
 }
@@ -117,7 +122,10 @@ describe("cli", () => {
     expect(guide.code).toBe(0);
     expect(guide.stdout).toContain("# dura");
 
-    expect((await exec(["guide"], { env: { DURA_TOKEN: "dura_revoked" } })).code).toBe(0);
+    const revoked = await exec(["guide"], { env: { DURA_TOKEN: "dura_revoked" } });
+    expect(revoked.code).toBe(0);
+    expect(revoked.auth).toEqual([null]);
+    expect((await exec(["show"])).auth[0]).toMatch(/^Bearer dura_/);
 
     const show = await exec(["show"], { env: { DURA_TOKEN: undefined } });
     expect(show.code).toBe(2);
@@ -134,6 +142,16 @@ describe("cli", () => {
     const noEnv = await exec(["show", "--url", "https://flag.example"], { env: { DURA_URL: undefined } });
     expect(noEnv.code).toBe(0);
     expect((await exec(["show"], { env: { DURA_URL: "https://env.example" } })).urls).toEqual(["https://env.example/api/states/s"]);
+
+    const withPath = await exec(["show", "--url=https://flag.example/dura/"]);
+    expect(withPath.urls).toEqual(["https://flag.example/dura/api/states/s"]);
+    expect((await exec(["guide", "--url", "https://flag.example"], { env: { DURA_URL: undefined, DURA_TOKEN: undefined } })).urls).toEqual([
+      "https://flag.example/api/guide",
+    ]);
+
+    const empty = await exec(["show", "--url", ""]);
+    expect(empty.code).toBe(2);
+    expect(empty.stderr).toContain("--url must not be empty");
 
     const bad = await exec(["show", "--url", "localhost"]);
     expect(bad.code).toBe(2);

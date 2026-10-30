@@ -64,6 +64,7 @@ interface Config {
  * so it stays out of shell history.
  */
 export function loadConfig(env: Io["env"], opts: { url?: string; requireToken?: boolean } = {}): Config {
+  if (opts.url !== undefined && !opts.url.trim()) throw new CliError("--url must not be empty.");
   const url = (opts.url ?? env.DURA_URL)?.trim();
   const token = env.DURA_TOKEN?.trim() || undefined;
   const requireToken = opts.requireToken ?? true;

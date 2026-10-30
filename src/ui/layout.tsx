@@ -3,7 +3,9 @@ import { raw } from "hono/html";
 import type { StateStatus } from "../db/schema";
 import { lineDiff, renderMarkdown } from "../lib/markdown";
 
-export function Layout(props: { title: string; loggedIn?: boolean; children: Child }) {
+export function Layout(props: { title: string; loggedIn?: boolean; path?: string; navCollapsed?: boolean; children: Child }) {
+  const inSettings = props.path === "/settings" || Boolean(props.path?.startsWith("/settings/"));
+  const current = (href: string) => ((href === "/settings") === inSettings ? "page" : undefined);
   return (
     <html lang="en">
       <head>
@@ -15,27 +17,46 @@ export function Layout(props: { title: string; loggedIn?: boolean; children: Chi
         <link rel="icon" href="/icon.svg" type="image/svg+xml" />
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="theme-color" content="#1f6f5c" />
+        {/* Marks JS as available before the first paint, so the menu starts closed on a narrow screen without a flash. */}
+        <script dangerouslySetInnerHTML={{ __html: 'document.documentElement.classList.add("js")' }} />
         <script src="/static/app.js" defer></script>
       </head>
-      <body>
+      <body class={props.loggedIn && props.navCollapsed ? "nav-collapsed" : undefined}>
         <header class="top">
+          {props.loggedIn && (
+            // Shown only with JS (html.js); without it the menu is always shown.
+            <button type="button" class="nav-toggle" aria-controls="sidenav" aria-label="Menu" data-nav-toggle>
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+              </svg>
+            </button>
+          )}
           <a class="brand" href="/">
             <img src="/icon.svg" alt="" />
             dura
           </a>
-          {props.loggedIn && (
-            <nav>
-              <a href="/">States</a>
-              <a href="/settings">Settings</a>
+        </header>
+        {props.loggedIn ? (
+          <div class="shell">
+            <nav id="sidenav" class="side" aria-label="Main">
+              <a href="/" aria-current={current("/")}>
+                States
+              </a>
+              <a href="/settings" aria-current={current("/settings")}>
+                Settings
+              </a>
               <form method="post" action="/logout">
                 <button class="link" type="submit">
                   Log out
                 </button>
               </form>
             </nav>
-          )}
-        </header>
-        <main>{props.children}</main>
+            <div class="nav-backdrop" data-nav-close></div>
+            <main>{props.children}</main>
+          </div>
+        ) : (
+          <main>{props.children}</main>
+        )}
       </body>
     </html>
   );

@@ -1,5 +1,6 @@
 import { count, eq } from "drizzle-orm";
 import { Hono, type Context } from "hono";
+import { getCookie } from "hono/cookie";
 import { createToken, endSession, HUMAN_ACTOR, listTokens, publicOrigin, revokeToken, type Token } from "../auth";
 import { passkeys, pushSubscriptions, STATE_STATUSES, webhooks, WEBHOOK_KINDS, type StateStatus, type WebhookKind } from "../db/schema";
 import type { AppEnv } from "../env";
@@ -30,6 +31,8 @@ import { Diff, Flash, Layout, Markdown, StatusBadge, Time } from "./layout";
 export const ui = new Hono<AppEnv>();
 
 const JOURNAL_PAGE = 10;
+/** Set by app.js when the side menu is collapsed on a wide screen, so the page renders collapsed without a flash. */
+const NAV_COOKIE = "dura_nav";
 
 // ---------------------------------------------------------------------------
 // Login & setup
@@ -100,7 +103,7 @@ ui.use("*", async (c, next) => {
 
 const page = (c: Context<AppEnv>, title: string, body: unknown, status: 200 | 400 | 409 = 200) =>
   c.html(
-    <Layout title={title} loggedIn>
+    <Layout title={title} loggedIn path={c.req.path} navCollapsed={getCookie(c, NAV_COOKIE) === "collapsed"}>
       {body as never}
     </Layout>,
     status,

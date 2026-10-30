@@ -23,14 +23,38 @@ const CSS = `
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", sans-serif; }
+body { margin: 0; display: flex; flex-direction: column; min-height: 100vh; background: var(--bg); color: var(--text); font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Hiragino Sans", sans-serif; }
 a { color: var(--accent); }
 header.top { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
 header.top .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text); text-decoration: none; }
 header.top .brand img { width: 24px; height: 24px; }
-header.top nav { margin-left: auto; display: flex; gap: 14px; align-items: center; }
-header.top nav form { margin: 0; }
-main { max-width: 920px; margin: 0 auto; padding: 20px 16px 64px; }
+header.top .nav-toggle { display: none; align-items: center; justify-content: center; width: 34px; height: 34px; margin: -4px 0 -4px -6px; padding: 0; border: none; border-radius: 8px; background: none; color: var(--text); }
+header.top .nav-toggle:hover { background: var(--code); }
+main { width: 100%; max-width: 920px; margin: 0 auto; padding: 20px 16px 64px; }
+.shell { flex: 1; display: flex; }
+.shell main { flex: 1; min-width: 0; }
+.side { flex: 0 0 200px; display: flex; flex-direction: column; gap: 2px; padding: 16px 10px; border-right: 1px solid var(--border); background: var(--surface); }
+.side a, .side button.link { display: block; width: 100%; padding: 8px 12px; border-radius: 8px; color: var(--text); text-decoration: none; text-align: left; }
+.side a:hover, .side button.link:hover { background: var(--code); }
+.side a[aria-current=page] { background: var(--code); color: var(--accent); font-weight: 600; }
+.side form { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--border); }
+body.nav-collapsed .side { display: none; }
+.nav-backdrop { display: none; }
+html.js header.top .nav-toggle { display: inline-flex; }
+@media (max-width: 760px) {
+  html.js .side, html.js body.nav-collapsed .side { display: flex; position: fixed; top: 0; bottom: 0; left: 0; z-index: 20; width: 240px; transform: translateX(-100%); visibility: hidden; transition: transform 0.2s ease, visibility 0s 0.2s; }
+  html.js body.nav-open .side { transform: none; visibility: visible; transition: transform 0.2s ease; box-shadow: 0 0 24px rgb(0 0 0 / 0.2); }
+  body.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 10; background: rgb(0 0 0 / 0.35); }
+}
+/* Without JS (no "js" class on <html>) the menu cannot be toggled, so it is always shown:
+   beside the page, or above it on a narrow screen. */
+html:not(.js) body.nav-collapsed .side { display: flex; }
+@media (max-width: 760px) {
+  html:not(.js) .shell { flex-direction: column; }
+  html:not(.js) .side { flex: none; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); }
+  html:not(.js) .side a, html:not(.js) .side button.link { width: auto; }
+  html:not(.js) .side form { margin: 0; padding: 0; border: none; }
+}
 h1 { font-size: 1.5rem; margin: 0 0 4px; line-height: 1.3; }
 h2 { font-size: 1.15rem; margin: 28px 0 10px; }
 .muted { color: var(--muted); font-size: 0.9em; }
@@ -207,6 +231,38 @@ document.addEventListener("click", async (ev) => {
     el.disabled = false;
   }
 });
+
+// Side menu: on a wide screen the toggle collapses it (remembered in a cookie); on a narrow one it opens an overlay.
+const navToggle = document.querySelector("[data-nav-toggle]");
+if (navToggle) {
+  const narrow = matchMedia("(max-width: 760px)");
+  const body = document.body;
+  const side = document.getElementById("sidenav");
+  // While the overlay is open, only the menu and the toggle (which closes it) take focus.
+  const behind = [document.querySelector(".shell main"), document.querySelector("header.top .brand")];
+  const isOpen = () => body.classList.contains("nav-open");
+  const sync = () => navToggle.setAttribute("aria-expanded", String(narrow.matches ? isOpen() : !body.classList.contains("nav-collapsed")));
+  // The overlay takes the focus while it is open and gives it back to the toggle when it closes.
+  const setOpen = (open, moveFocus = true) => {
+    const wasOpen = isOpen();
+    body.classList.toggle("nav-open", open);
+    for (const el of behind) el.inert = open;
+    sync();
+    if (!moveFocus) return;
+    if (open) side.querySelector("a, button").focus();
+    else if (wasOpen) navToggle.focus();
+  };
+  sync();
+  narrow.addEventListener("change", () => setOpen(false, false));
+  navToggle.addEventListener("click", () => {
+    if (narrow.matches) return setOpen(!isOpen());
+    const collapsed = body.classList.toggle("nav-collapsed");
+    document.cookie = "dura_nav=" + (collapsed ? "collapsed" : "open") + "; path=/; max-age=31536000; samesite=lax";
+    sync();
+  });
+  document.querySelector("[data-nav-close]").addEventListener("click", () => setOpen(false));
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && isOpen()) setOpen(false); });
+}
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 `;

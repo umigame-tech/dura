@@ -4,8 +4,8 @@ import type { StateStatus } from "../db/schema";
 import { lineDiff, renderMarkdown } from "../lib/markdown";
 
 export function Layout(props: { title: string; loggedIn?: boolean; path?: string; navCollapsed?: boolean; children: Child }) {
-  const current = (href: string) =>
-    (href === "/settings" ? props.path?.startsWith("/settings") : !props.path?.startsWith("/settings")) ? "page" : undefined;
+  const inSettings = props.path === "/settings" || Boolean(props.path?.startsWith("/settings/"));
+  const current = (href: string) => ((href === "/settings") === inSettings ? "page" : undefined);
   return (
     <html lang="en">
       <head>
@@ -22,12 +22,12 @@ export function Layout(props: { title: string; loggedIn?: boolean; path?: string
       <body class={props.loggedIn && props.navCollapsed ? "nav-collapsed" : undefined}>
         <header class="top">
           {props.loggedIn && (
-            // A link so that the menu still opens through :target without JS; app.js turns it into a toggle.
-            <a class="nav-toggle" href="#sidenav" aria-controls="sidenav" aria-label="Menu" data-nav-toggle>
+            // Without JS the CSS hides this button and always shows the menu.
+            <button type="button" class="nav-toggle" aria-controls="sidenav" aria-label="Menu" data-nav-toggle>
               <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                 <path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
               </svg>
-            </a>
+            </button>
           )}
           <a class="brand" href="/">
             <img src="/icon.svg" alt="" />

@@ -28,7 +28,7 @@ a { color: var(--accent); }
 header.top { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
 header.top .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; color: var(--text); text-decoration: none; }
 header.top .brand img { width: 24px; height: 24px; }
-header.top .nav-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin: -4px 0 -4px -6px; border-radius: 8px; color: var(--text); }
+header.top .nav-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin: -4px 0 -4px -6px; padding: 0; border: none; border-radius: 8px; background: none; color: var(--text); }
 header.top .nav-toggle:hover { background: var(--code); }
 main { width: 100%; max-width: 920px; margin: 0 auto; padding: 20px 16px 64px; }
 .shell { flex: 1; display: flex; }
@@ -40,10 +40,21 @@ main { width: 100%; max-width: 920px; margin: 0 auto; padding: 20px 16px 64px; }
 .side form { margin: 8px 0 0; padding-top: 8px; border-top: 1px solid var(--border); }
 body.nav-collapsed .side { display: none; }
 .nav-backdrop { display: none; }
-@media (max-width: 760px) {
-  .side, body.nav-collapsed .side { display: flex; position: fixed; top: 0; bottom: 0; left: 0; z-index: 20; width: 240px; transform: translateX(-100%); visibility: hidden; transition: transform 0.2s ease, visibility 0.2s; }
-  .side:target, body.nav-open .side { transform: none; visibility: visible; box-shadow: 0 0 24px rgb(0 0 0 / 0.2); }
+@media (max-width: 760px) and (scripting: enabled) {
+  .side, body.nav-collapsed .side { display: flex; position: fixed; top: 0; bottom: 0; left: 0; z-index: 20; width: 240px; transform: translateX(-100%); visibility: hidden; transition: transform 0.2s ease, visibility 0s 0.2s; }
+  body.nav-open .side { transform: none; visibility: visible; transition: transform 0.2s ease; box-shadow: 0 0 24px rgb(0 0 0 / 0.2); }
   body.nav-open .nav-backdrop { display: block; position: fixed; inset: 0; z-index: 10; background: rgb(0 0 0 / 0.35); }
+}
+/* Without JS the menu cannot be toggled, so it is always shown: beside the page, or above it on a narrow screen. */
+@media (scripting: none) {
+  header.top .nav-toggle { display: none; }
+  body.nav-collapsed .side { display: flex; }
+}
+@media (max-width: 760px) and (scripting: none) {
+  .shell { flex-direction: column; }
+  .side { flex: none; flex-direction: row; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--border); }
+  .side a, .side button.link { width: auto; }
+  .side form { margin: 0; padding: 0; border: none; }
 }
 h1 { font-size: 1.5rem; margin: 0 0 4px; line-height: 1.3; }
 h2 { font-size: 1.15rem; margin: 28px 0 10px; }
@@ -227,19 +238,30 @@ const navToggle = document.querySelector("[data-nav-toggle]");
 if (navToggle) {
   const narrow = matchMedia("(max-width: 760px)");
   const body = document.body;
-  const sync = () => navToggle.setAttribute("aria-expanded", String(narrow.matches ? body.classList.contains("nav-open") : !body.classList.contains("nav-collapsed")));
-  const setOpen = (open) => { body.classList.toggle("nav-open", open); sync(); };
+  const side = document.getElementById("sidenav");
+  const page = document.querySelector(".shell main");
+  const isOpen = () => body.classList.contains("nav-open");
+  const sync = () => navToggle.setAttribute("aria-expanded", String(narrow.matches ? isOpen() : !body.classList.contains("nav-collapsed")));
+  // The overlay takes the focus while it is open and gives it back to the toggle when it closes.
+  const setOpen = (open, moveFocus = true) => {
+    const wasOpen = isOpen();
+    body.classList.toggle("nav-open", open);
+    page.inert = open;
+    sync();
+    if (!moveFocus) return;
+    if (open) side.querySelector("a, button").focus();
+    else if (wasOpen) navToggle.focus();
+  };
   sync();
-  narrow.addEventListener("change", () => setOpen(false));
-  navToggle.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    if (narrow.matches) return setOpen(!body.classList.contains("nav-open"));
+  narrow.addEventListener("change", () => setOpen(false, false));
+  navToggle.addEventListener("click", () => {
+    if (narrow.matches) return setOpen(!isOpen());
     const collapsed = body.classList.toggle("nav-collapsed");
     document.cookie = "dura_nav=" + (collapsed ? "collapsed" : "open") + "; path=/; max-age=31536000; samesite=lax";
     sync();
   });
   document.querySelector("[data-nav-close]").addEventListener("click", () => setOpen(false));
-  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") setOpen(false); });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && isOpen()) setOpen(false); });
 }
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});

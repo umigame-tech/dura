@@ -145,8 +145,9 @@ describe("web UI", () => {
     expect(home).toContain('<nav id="sidenav" class="side" aria-label="Main"><a href="/" aria-current="page">States</a>');
     expect(home).toContain('<a href="/settings">Settings</a>');
     expect(home).toContain('action="/logout"');
-    expect(home).toContain('href="#sidenav"');
+    expect(home).toContain('aria-controls="sidenav"');
     expect(home).not.toContain("nav-collapsed");
+    expect(await (await get("/", "dura_nav=open")).text()).not.toContain("nav-collapsed");
 
     const settings = await (await get("/settings")).text();
     expect(settings).toContain('<a href="/">States</a>');
@@ -155,8 +156,12 @@ describe("web UI", () => {
     const collapsed = await (await get("/", "dura_nav=collapsed")).text();
     expect(collapsed).toContain('<body class="nav-collapsed">');
 
-    const login = await (await app.request("/login")).text();
+    const login = await (await app.request("/login", { headers: { Cookie: "dura_nav=collapsed" } })).text();
     expect(login).not.toContain("sidenav");
+    expect(login).not.toContain("nav-collapsed");
+
+    const js = await (await app.request("/static/app.js")).text();
+    expect(js).toContain('document.querySelector("[data-nav-toggle]")');
   });
 
   it("shows a diff instead of overwriting on conflict", async () => {

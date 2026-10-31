@@ -62,7 +62,7 @@ ui.get("/setup", async (c) => {
       <div class="card auth-card">
         <h1>Welcome to dura</h1>
         {enabled ? (
-          <form class="stack" data-no-submit>
+          <div class="stack">
             <p class="muted">Register the passkey you will use to log in. You can add more passkeys later.</p>
             <label for="setup-token">Setup token</label>
             <input id="setup-token" type="password" autocomplete="off" placeholder="DURA_SETUP_TOKEN" />
@@ -72,7 +72,7 @@ ui.get("/setup", async (c) => {
               Register passkey
             </button>
             <p id="error" class="flash error" hidden></p>
-          </form>
+          </div>
         ) : (
           <p>
             Initial setup is disabled. Set the <code>DURA_SETUP_TOKEN</code> environment variable on the server, restart
@@ -290,7 +290,7 @@ ui.get("/s/:id", async (c) => {
         <form class="stack" method="post" action={`/s/${encodeURIComponent(id)}/journal`}>
           <div class="row">
             <label for="kind">Kind</label>
-            <input id="kind" name="kind" type="text" value="note" class="narrow" />
+            <input id="kind" name="kind" type="text" value="note" class="narrow kind" />
           </div>
           <textarea name="body" class="short" required></textarea>
           <div>

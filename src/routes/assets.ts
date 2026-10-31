@@ -103,6 +103,7 @@ input[type=text], input[type=url], input[type=password], select, textarea {
 textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; min-height: 50vh; resize: vertical; }
 textarea.short { min-height: 6em; }
 input.narrow { max-width: 240px; }
+input.narrow.kind { max-width: 200px; }
 button, .button { display: inline-block; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
 button.secondary, .button.secondary { background: transparent; color: var(--accent); }
 button.link { background: none; border: none; color: var(--accent); padding: 0; font-weight: normal; text-decoration: underline; }
@@ -202,11 +203,6 @@ async function enablePush(statusEl) {
   await postJson("/push/subscribe", { endpoint: json.endpoint, keys: json.keys, label: navigator.userAgent.slice(0, 120) });
   if (statusEl) statusEl.textContent = "Notifications are enabled on this device.";
 }
-
-// Forms whose button runs a script (passkey setup) must not submit when Enter is pressed in a field.
-document.addEventListener("submit", (ev) => {
-  if (ev.target.matches("[data-no-submit]")) ev.preventDefault();
-});
 
 document.addEventListener("click", async (ev) => {
   const el = ev.target.closest("[data-action]");

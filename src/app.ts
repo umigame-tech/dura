@@ -15,9 +15,13 @@ import { ui } from "./ui/routes";
 export function createApp(deps: Deps) {
   const app = new Hono<AppEnv>();
 
-  // Scripts and styles come only from /static (plus the one inline script, by hash). Markdown written by agents
-  // may show images from anywhere, so img-src stays open. Referrer-Policy must not be no-referrer: browsers then
-  // send "Origin: null" on form posts, and the CSRF checks reject them.
+  // Scripts and styles come only from /static (plus the one inline script, by hash).
+  // Markdown written by agents may show images from anywhere, so img-src stays open, as before this policy. The risk:
+  // an agent can put data in an image URL that the browser then requests. Close it with img-src 'self' (or a list of
+  // hosts, or an image proxy) if that matters more than external images.
+  // Referrer-Policy must not be no-referrer: browsers then send "Origin: null" on form posts, and the CSRF checks
+  // reject them. hono's defaults also send Cross-Origin-Resource-Policy: same-origin, so other sites cannot embed
+  // these responses; nothing here is meant to be embedded.
   app.use(
     secureHeaders({
       contentSecurityPolicy: {
@@ -33,6 +37,8 @@ export function createApp(deps: Deps) {
       referrerPolicy: "same-origin",
       strictTransportSecurity: "max-age=15552000",
       xFrameOptions: "DENY",
+      // Passkeys (publickey-credentials-*) stay allowed.
+      permissionsPolicy: { camera: [], microphone: [], geolocation: [] },
     }),
   );
 

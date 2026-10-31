@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { passkeys, pushSubscriptions } from "../src/db/schema";
+import { eq } from "drizzle-orm";
+import { journalEntries, passkeys, pushSubscriptions, states } from "../src/db/schema";
 import type { Deps } from "../src/env";
 import { ASSET_VERSION, contentVersion, ICON } from "../src/routes/assets";
 import { INLINE_SCRIPT, INLINE_SCRIPT_SHA256 } from "../src/ui/layout";
@@ -108,6 +109,18 @@ describe("web UI", () => {
     for (const tricky of ["/.//evil.example", "/./\\evil.example", "/a/..//evil.example", "/%2e//evil.example", `${origin}//evil.example`]) {
       expect(new URL(sameSitePath(tricky, origin), origin).origin).toBe(origin);
     }
+  });
+
+  it("stores LF for CRLF form submissions", async () => {
+    const { db, post } = await loggedIn();
+    await post("/states", { title: "X", id: "x", goal: "Ship it" });
+    await post("/s/x/journal", { kind: "note", body: "a\r\nb" });
+    await post("/s/x/status", { status: "waiting", statusNote: "q1\r\nq2" });
+    const bodies = (await db.select().from(journalEntries).where(eq(journalEntries.stateId, "x"))).map((e) => e.body);
+    expect(bodies).toContain("a\nb");
+    expect(bodies.some((b) => b.includes("\r"))).toBe(false);
+    const row = (await db.select().from(states).where(eq(states.id, "x")))[0];
+    expect(row?.statusNote).toBe("q1\nq2");
   });
 
   it("pages the journal newest first", async () => {

@@ -322,6 +322,9 @@ function SectionView(props: { stateId: string; section: Section }) {
   );
 }
 
+// Browsers submit textareas with CRLF; store LF so Markdown and diffs stay stable.
+const crlfToLf = (v: string) => v.replace(/\r\n/g, "\n");
+
 ui.post("/s/:id/status", async (c) => {
   const deps = c.get("deps");
   const id = c.req.param("id");
@@ -329,7 +332,7 @@ ui.post("/s/:id/status", async (c) => {
   const { state, previous } = await updateState(
     deps.db,
     id,
-    { status: f.status as StateStatus, statusNote: f.statusNote ?? null },
+    { status: f.status as StateStatus, statusNote: f.statusNote == null ? null : crlfToLf(f.statusNote) },
     HUMAN_ACTOR,
   );
   notifyStatusChange(deps, state, previous, HUMAN_ACTOR, publicOrigin(c));
@@ -339,7 +342,7 @@ ui.post("/s/:id/status", async (c) => {
 ui.post("/s/:id/journal", async (c) => {
   const id = c.req.param("id");
   const f = await form(c);
-  const entry = await appendJournal(c.get("deps").db, id, HUMAN_ACTOR, f.kind || "note", f.body ?? "");
+  const entry = await appendJournal(c.get("deps").db, id, HUMAN_ACTOR, f.kind || "note", crlfToLf(f.body ?? ""));
   return c.redirect(`${stateUrl(id)}#j${entry.seq}`);
 });
 
@@ -433,7 +436,7 @@ ui.post("/s/:id/sections/:name", async (c) => {
   const { db } = c.get("deps");
   const { id, name } = c.req.param();
   const f = await form(c);
-  const content = (f.content ?? "").replace(/\r\n/g, "\n");
+  const content = crlfToLf(f.content ?? "");
   const version = Number(f.version ?? 0);
   try {
     await putSection(db, id, name, content, version, HUMAN_ACTOR);

@@ -232,3 +232,30 @@ describe("token permissions", () => {
     expect(entries).toEqual([]);
   });
 });
+
+describe("request body validation", () => {
+  it("rejects wrongly typed JSON bodies with 400", async () => {
+    const { call, tokenFor } = await setup();
+    const t = await tokenFor("orchestrator");
+    await call(t, "POST", "/api/states", { id: "s", title: "S", sections: { goal: "g" } });
+    const cases: [string, string, unknown][] = [
+      ["POST", "/api/states", null],
+      ["POST", "/api/states", { title: 1 }],
+      ["POST", "/api/states", { title: "x", sections: "abc" }],
+      ["POST", "/api/states", { title: "x", sections: { goal: 1 } }],
+      ["POST", "/api/states", { title: "x", statusNote: true }],
+      ["PATCH", "/api/states/s", null],
+      ["PATCH", "/api/states/s", { title: 1 }],
+      ["PATCH", "/api/states/s", { statusNote: true }],
+      ["PUT", "/api/states/s/sections/goal", null],
+      ["POST", "/api/states/s/sections/goal/replace", { old: 1, new: "x" }],
+      ["POST", "/api/states/s/sections/goal/replace", { old: "g" }],
+      ["POST", "/api/states/s/journal", { body: "x", kind: 5 }],
+      ["POST", "/api/states/s/journal", null],
+    ];
+    for (const [method, path, body] of cases) {
+      const res = await call(t, method, path, body, { "If-Match": "1" });
+      expect(res.status, `${method} ${path} ${JSON.stringify(body)}`).toBe(400);
+    }
+  });
+});

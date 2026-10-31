@@ -53,6 +53,24 @@ async function jsonBody<T>(c: Context<AppEnv>): Promise<T> {
   }
 }
 
+function objectBody(v: unknown): Record<string, unknown> {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) throw badRequest("Request body must be a JSON object.");
+  return v as Record<string, unknown>;
+}
+
+function optString(o: Record<string, unknown>, key: string, nullable = false): string | undefined {
+  const v = o[key];
+  if (v === undefined || (nullable && v === null)) return undefined;
+  if (typeof v !== "string") throw badRequest(`${key} must be a string${nullable ? " or null" : ""}.`);
+  return v;
+}
+
+function reqString(o: Record<string, unknown>, key: string): string {
+  const v = optString(o, key);
+  if (v === undefined) throw badRequest(`${key} is required and must be a string.`);
+  return v;
+}
+
 const isJson = (c: Context<AppEnv>) => (c.req.header("Content-Type") ?? "").includes("application/json");
 
 function sectionJson(s: Section) {
@@ -86,14 +104,24 @@ api.get("/states", async (c) => {
 api.post("/states", async (c) => {
   const actor = requireActor(c);
   assertWrite(actor, null);
-  const body = await jsonBody<{
-    id?: string;
-    title: string;
-    status?: StateStatus;
-    statusNote?: string;
-    sections?: Record<string, string>;
-  }>(c);
-  const state = await createState(c.get("deps").db, body, actor.name);
+  const body = objectBody(await jsonBody<unknown>(c));
+  let sections: Record<string, string> | undefined;
+  if (body.sections !== undefined) {
+    const raw = objectBody(body.sections);
+    for (const [k, v] of Object.entries(raw)) if (typeof v !== "string") throw badRequest(`sections.${k} must be a string.`);
+    sections = raw as Record<string, string>;
+  }
+  const state = await createState(
+    c.get("deps").db,
+    {
+      id: optString(body, "id"),
+      title: reqString(body, "title"),
+      status: optString(body, "status") as StateStatus | undefined,
+      statusNote: optString(body, "statusNote", true),
+      sections,
+    },
+    actor.name,
+  );
   return c.json({ state }, 201);
 });
 
@@ -115,8 +143,13 @@ api.patch("/states/:id", async (c) => {
   const id = c.req.param("id");
   assertWrite(actor, id);
   const deps = c.get("deps");
-  const body = await jsonBody<{ title?: string; status?: StateStatus; statusNote?: string | null }>(c);
-  const { state, previous } = await updateState(deps.db, id, body, actor.name);
+  const body = objectBody(await jsonBody<unknown>(c));
+  const patch = {
+    title: optString(body, "title"),
+    status: optString(body, "status") as StateStatus | undefined,
+    statusNote: body.statusNote === null ? null : optString(body, "statusNote"),
+  };
+  const { state, previous } = await updateState(deps.db, id, patch, actor.name);
   notifyStatusChange(deps, state, previous, actor.name, publicOrigin(c));
   return c.json({ state });
 });
@@ -137,7 +170,7 @@ api.put("/states/:id/sections/:name", async (c) => {
   assertWrite(actor, id);
   let content: string;
   if (isJson(c)) {
-    const body = await jsonBody<{ content?: unknown }>(c);
+    const body = objectBody(await jsonBody<unknown>(c));
     if (typeof body.content !== "string") throw badRequest("content must be a string.");
     content = body.content;
   } else {
@@ -156,8 +189,10 @@ api.post("/states/:id/sections/:name/replace", async (c) => {
   if (version === null) {
     throw new ApiError(428, "precondition_required", "replace requires If-Match: <version you read>.");
   }
-  const body = await jsonBody<{ old: string; new: string; replaceAll?: boolean }>(c);
-  const section = await replaceInSection(c.get("deps").db, id, name, body, version, actor.name);
+  const body = objectBody(await jsonBody<unknown>(c));
+  if (body.replaceAll !== undefined && typeof body.replaceAll !== "boolean") throw badRequest("replaceAll must be a boolean.");
+  const edit = { old: reqString(body, "old"), new: reqString(body, "new"), replaceAll: body.replaceAll };
+  const section = await replaceInSection(c.get("deps").db, id, name, edit, version, actor.name);
   c.header("ETag", `"${section.version}"`);
   return c.json({ section: sectionJson(section) });
 });
@@ -196,10 +231,9 @@ api.post("/states/:id/journal", async (c) => {
   let kind = c.req.query("kind") ?? "note";
   let body: string;
   if (isJson(c)) {
-    const json = await jsonBody<{ kind?: string; body?: unknown }>(c);
-    if (typeof json.body !== "string") throw badRequest("body must be a string.");
-    kind = json.kind ?? kind;
-    body = json.body;
+    const json = objectBody(await jsonBody<unknown>(c));
+    body = reqString(json, "body");
+    kind = optString(json, "kind") ?? kind;
   } else {
     body = await c.req.text();
   }

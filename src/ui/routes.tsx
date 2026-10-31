@@ -42,7 +42,7 @@ ui.get("/login", async (c) => {
   if (c.get("actor")) return c.redirect("/");
   return c.html(
     <Layout title="Log in">
-      <div class="card" style="max-width:420px;margin:40px auto;text-align:center">
+      <div class="card auth-card center">
         <h1>Log in</h1>
         <p class="muted">Use the passkey you registered for this dura instance.</p>
         <button type="button" data-action="login">
@@ -59,10 +59,10 @@ ui.get("/setup", async (c) => {
   const enabled = Boolean(c.get("deps").config.setupToken);
   return c.html(
     <Layout title="Set up">
-      <div class="card" style="max-width:480px;margin:40px auto">
+      <div class="card auth-card">
         <h1>Welcome to dura</h1>
         {enabled ? (
-          <form class="stack" onsubmit="return false">
+          <form class="stack" data-no-submit>
             <p class="muted">Register the passkey you will use to log in. You can add more passkeys later.</p>
             <label for="setup-token">Setup token</label>
             <input id="setup-token" type="password" autocomplete="off" placeholder="DURA_SETUP_TOKEN" />
@@ -290,7 +290,7 @@ ui.get("/s/:id", async (c) => {
         <form class="stack" method="post" action={`/s/${encodeURIComponent(id)}/journal`}>
           <div class="row">
             <label for="kind">Kind</label>
-            <input id="kind" name="kind" type="text" value="note" style="max-width:200px" />
+            <input id="kind" name="kind" type="text" value="note" class="narrow" />
           </div>
           <textarea name="body" class="short" required></textarea>
           <div>
@@ -591,7 +591,7 @@ async function settingsPage(c: Context<AppEnv>, flash?: { kind: "ok" | "error"; 
               <tr>
                 <td>
                   {h.name} <span class="muted">({h.kind})</span>
-                  <div class="muted" style="word-break:break-all">{h.url}</div>
+                  <div class="muted break-all">{h.url}</div>
                 </td>
                 <td class="row">
                   <form method="post" action={`/settings/webhooks/${h.id}/test`}>
@@ -609,7 +609,7 @@ async function settingsPage(c: Context<AppEnv>, flash?: { kind: "ok" | "error"; 
             ))}
           </table>
         )}
-        <form class="stack" method="post" action="/settings/webhooks" style="margin-top:10px">
+        <form class="stack spaced" method="post" action="/settings/webhooks">
           <div class="grid2">
             <div>
               <label for="hook-name">Name</label>
@@ -661,7 +661,7 @@ async function settingsPage(c: Context<AppEnv>, flash?: { kind: "ok" | "error"; 
         ))}
       </table>
       <div class="card row">
-        <input id="passkey-name" type="text" value="Another device" style="max-width:240px" />
+        <input id="passkey-name" type="text" value="Another device" class="narrow" />
         <button type="button" data-action="add-passkey" data-error="passkey-error">
           Add passkey
         </button>

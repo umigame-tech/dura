@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { csrf } from "hono/csrf";
 import { HTTPException } from "hono/http-exception";
+import { secureHeaders } from "hono/secure-headers";
 import { publicOrigin, resolveActor } from "./auth";
 import type { AppEnv, Deps } from "./env";
 import { ApiError } from "./lib/errors";
@@ -8,10 +9,32 @@ import { handleMcp } from "./mcp";
 import { api } from "./routes/api";
 import { assets } from "./routes/assets";
 import { authRoutes } from "./routes/webauthn";
+import { INLINE_SCRIPT_SHA256 } from "./ui/layout";
 import { ui } from "./ui/routes";
 
 export function createApp(deps: Deps) {
   const app = new Hono<AppEnv>();
+
+  // Scripts and styles come only from /static (plus the one inline script, by hash). Markdown written by agents
+  // may show images from anywhere, so img-src stays open. Referrer-Policy must not be no-referrer: browsers then
+  // send "Origin: null" on form posts, and the CSRF checks reject them.
+  app.use(
+    secureHeaders({
+      contentSecurityPolicy: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", `'sha256-${INLINE_SCRIPT_SHA256}'`],
+        styleSrc: ["'self'"],
+        imgSrc: ["*"],
+        objectSrc: ["'none'"],
+        baseUri: ["'none'"],
+        formAction: ["'self'"],
+        frameAncestors: ["'none'"],
+      },
+      referrerPolicy: "same-origin",
+      strictTransportSecurity: "max-age=15552000",
+      xFrameOptions: "DENY",
+    }),
+  );
 
   app.use(async (c, next) => {
     c.set("deps", deps);

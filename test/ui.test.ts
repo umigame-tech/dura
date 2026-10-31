@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { passkeys, pushSubscriptions } from "../src/db/schema";
 import type { Deps } from "../src/env";
 import { ASSET_VERSION, contentVersion, ICON } from "../src/routes/assets";
+import { INLINE_SCRIPT, INLINE_SCRIPT_SHA256 } from "../src/ui/layout";
 import { SOURCE_ICON_SHA256 } from "../src/routes/icons";
 import { base64urlEncode } from "../src/lib/util";
 import { ORIGIN, setup } from "./helpers";
@@ -183,6 +184,44 @@ describe("web UI", () => {
     expect(contentVersion(cssBody, jsBody + " ")).not.toBe(ASSET_VERSION);
     expect(contentVersion("ab", "c")).not.toBe(contentVersion("a", "bc"));
     expect(contentVersion("😀")).not.toBe(contentVersion("😁"));
+  });
+
+  it("sends a Content-Security-Policy that the pages keep to", async () => {
+    const { app, get, post, call } = await loggedIn();
+    const setupPage = await (await setup()).app.request("/setup");
+    const csp = setupPage.headers.get("Content-Security-Policy") ?? "";
+    expect(csp).toContain("default-src 'self'");
+    expect(csp).toContain(`script-src 'self' 'sha256-${INLINE_SCRIPT_SHA256}'`);
+    expect(csp).toContain("style-src 'self'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(csp).not.toContain("unsafe-inline");
+    expect(setupPage.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(setupPage.headers.get("X-Frame-Options")).toBe("DENY");
+    // no-referrer would make browsers send "Origin: null" on form posts, which the CSRF checks reject.
+    expect(setupPage.headers.get("Referrer-Policy")).toBe("same-origin");
+    expect(createHash("sha256").update(INLINE_SCRIPT).digest("base64")).toBe(INLINE_SCRIPT_SHA256);
+
+    await post("/states", { title: "X", id: "x", goal: "Ship it" });
+    await post("/s/x/journal", { kind: "note", body: "hello" });
+    await post("/settings/webhooks", { name: "phone", kind: "json", url: "https://hooks.example/x" });
+    const pages = [await setupPage.text()];
+    for (const path of ["/", "/s/x", "/s/x/new-section", "/s/x/sections/goal/edit", "/s/x/sections/goal/history", "/settings"]) {
+      const res = await get(path);
+      expect(res.status, path).toBe(200);
+      pages.push(await res.text());
+    }
+    expect(pages.at(-1)).toContain("hooks.example");
+    expect(pages.at(-1)).toContain("break-all");
+    for (const html of pages) {
+      // Inline style attributes and event handlers would be blocked by the policy.
+      expect(html).not.toMatch(/\sstyle=|\son[a-z]+=/i);
+      const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+      expect(inline).toEqual([INLINE_SCRIPT]);
+    }
+
+    // Errors and API responses carry the headers too.
+    expect((await call(null, "GET", "/api/states")).headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect((await app.request("/static/app.css")).headers.get("Content-Security-Policy")).toContain("default-src");
   });
 
   it("shows a diff instead of overwriting on conflict", async () => {

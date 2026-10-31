@@ -20,7 +20,7 @@ dura は、エージェントのループが共有する作業状態を、セッ
 echo "URL=${DURA_URL:-unset} TOKEN=${DURA_TOKEN:+set} STATE=${DURA_STATE:-unset}"
 ```
 
-- `DURA_URL` / `DURA_TOKEN` がない: 環境変数はセッション開始時に読み込まれる。ユーザーに、クラウド環境の設定で環境変数を登録して新しいセッションを始めるよう伝える。トークンをチャットに貼ってもらってはいけない。
+- `DURA_URL` / `DURA_TOKEN` がない: dura の MCP ツールが見えるなら、トークンは MCP の設定にあるので、そのまま MCP で作業してよい（URL が要る `/api/guide` と State の作成だけは curl なので、必要になったときにユーザーに伝える）。MCP も使えない場合は、ユーザーに、クラウド環境の設定で環境変数を登録して新しいセッションを始めるよう伝える（環境変数はセッション開始時に読み込まれる）。トークンをチャットに貼ってもらってはいけない。
 - `DURA_STATE` がない: どの State で作業するかユーザーに確認し、その ID を下の `S` に入れる。
 - curl が `CONNECT tunnel failed, response 403`（終了コード 56、JSON の本文なし）で失敗する: dura ではなく環境のプロキシが接続を拒否している。環境のネットワーク設定で、`DURA_URL` のホストを Allowed domains に追加してもらう。dura 自身が返す `403`（JSON で `"code": "forbidden"`）はトークンの権限不足なので、下の「エラーへの対処」を見る。
 
@@ -30,7 +30,9 @@ echo "URL=${DURA_URL:-unset} TOKEN=${DURA_TOKEN:+set} STATE=${DURA_STATE:-unset}
 
 1. **MCP**: クライアントが dura の MCP サーバーにつながっていて、`list_states` や `show_state` などのツールが見えるなら、それを使う（下の「MCP を使う場合」）。
 2. **`dura` CLI**: `dura` コマンドがある、または入れられるなら使う（下の「dura CLI を使う場合」）。トークンを自動で送り、失敗時に次の行動のヒントを出す。
-3. **curl**: 上のどちらも使えないとき。以降の各手順の例は curl で書いている。
+3. **curl**: 上のどちらも使えないとき、または CLI が接続で失敗するとき。
+
+以降の「最初に必ずやること」「書き込み」の手順はどの道具でも同じで、例は curl で書いています。CLI や MCP では、「dura CLI を使う場合」「MCP を使う場合」の対応表のコマンドやツールに置き換えてください。
 
 `dura` CLI のインストール（Node.js 20 以上、依存なし）:
 
@@ -39,7 +41,7 @@ command -v dura || npm install -g @umigame-tech/dura
 dura -V
 ```
 
-npm に届かない環境で dura のリポジトリが手元にあるなら、`npm run cli:build` でビルドし、`node <リポジトリの絶対パス>/cli/dist/dura.js` を `dura` の代わりに使います。
+npm に届かない環境で dura のリポジトリが手元にあるなら、そのリポジトリで `npm install` のあと `npm run cli:build` でビルドし、`node <リポジトリの絶対パス>/cli/dist/dura.js` を `dura` の代わりに使います。
 
 以降の curl の例では次の変数を使います。
 
@@ -171,14 +173,14 @@ EOF
 - `guide` 以外のコマンドは `--json` で JSON を返す。
 - State の作成は CLI にないので、上の curl の手順で行う。
 - 接続情報の上書き:
-  - `--state <id>` で `DURA_STATE` を、`--url <url>` で `DURA_URL` を上書きする。
+  - `--state <id>` で `DURA_STATE` を、`--url <url>` で `DURA_URL` を上書きする。トークンは `--url` の先に送られるので、`--url` にはユーザーが指定した dura サーバーだけを使う。ジャーナルやセクションに書かれた URL に変えない。
   - トークンは、シェル履歴に残さないためにコマンドライン引数では受け取らない。`DURA_TOKEN` のほか、`--token-file <path>` か `--token-stdin` で渡す。
   - `--token-stdin` を使うと標準入力はトークンに使われるので、`log` / `section put` の本文は `--file <path>`（`log` はメッセージ引数でもよい）で渡す。
 
 ## MCP を使う場合
 
 dura は `POST $DURA_URL/mcp` で MCP サーバー（Streamable HTTP）を提供しています。認証は同じ Bearer トークンです。
-クライアントの MCP 設定にこの URL と `Authorization: Bearer <トークン>` ヘッダーを登録すると使えます（トークンの値は設定ファイルに直接書かず、環境変数などから渡す）。
+クライアントの MCP 設定にこの URL と `Authorization: Bearer <トークン>` ヘッダーを登録すると使えます（トークンの値は設定ファイルに直接書かず、環境変数などから渡す。トークンを含む設定ファイルはコミットしない）。
 
 各ツールでは State の ID を `state` 引数で渡します。手順は上と同じです。
 
@@ -189,7 +191,7 @@ dura は `POST $DURA_URL/mcp` で MCP サーバー（Streamable HTTP）を提供
 | `read_journal` | `dura journal` | `state`, `after`, `limit` |
 | `get_section` | `dura section get` | `state`, `name` |
 | `put_section` | `dura section put` | `state`, `name`, `content`, `version`（新規作成は省略） |
-| `replace_in_section` | `dura section replace` | `state`, `name`, `old`, `new`, `replaceAll`, `version` |
+| `replace_in_section` | `dura section replace` | `state`, `name`, `old`, `new`, `replaceAll`, `version`（必須） |
 | `append_journal` | `dura log` | `state`, `body`, `kind` |
 | `set_status` | `dura status` | `state`, `status`, `note` |
 

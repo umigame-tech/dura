@@ -59,6 +59,10 @@ h1 { font-size: 1.5rem; margin: 0 0 4px; line-height: 1.3; }
 h2 { font-size: 1.15rem; margin: 28px 0 10px; }
 .muted { color: var(--muted); font-size: 0.9em; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+.card.auth-card { max-width: 480px; margin: 40px auto; }
+.card.auth-card.center { max-width: 420px; text-align: center; }
+.break-all { word-break: break-all; }
+.spaced { margin-top: 10px; }
 .badge { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; color: #fff; vertical-align: middle; }
 .badge.active { background: var(--active); } .badge.waiting { background: var(--waiting); }
 .badge.completed { background: var(--completed); } .badge.abandoned { background: var(--abandoned); }
@@ -98,6 +102,8 @@ input[type=text], input[type=url], input[type=password], select, textarea {
 }
 textarea { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; min-height: 50vh; resize: vertical; }
 textarea.short { min-height: 6em; }
+input.narrow { max-width: 240px; }
+input.narrow.kind { max-width: 200px; }
 button, .button { display: inline-block; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 600; cursor: pointer; text-decoration: none; }
 button.secondary, .button.secondary { background: transparent; color: var(--accent); }
 button.link { background: none; border: none; color: var(--accent); padding: 0; font-weight: normal; text-decoration: underline; }

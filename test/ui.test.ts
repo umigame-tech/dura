@@ -21,7 +21,7 @@ async function loggedIn(overrides: Partial<Deps> = {}) {
       headers: { Cookie: cookie, Origin: origin, "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(fields).toString(),
     });
-  return { ...ctx, get, post };
+  return { ...ctx, cookie, get, post };
 }
 
 describe("web UI", () => {
@@ -339,6 +339,53 @@ describe("web UI", () => {
     const html = await (await get("/s/x/sections/findings/edit")).text();
     expect(html).toContain('name="version" value="0"');
     expect((await get("/s/x/sections/Bad%20Name/edit")).status).toBe(400);
+  });
+
+  it("shows form errors as a page, not JSON", async () => {
+    const { app, cookie, post } = await loggedIn();
+    const browserPost = (path: string, fields: Record<string, string>, referer?: string) =>
+      app.request(path, {
+        method: "POST",
+        headers: {
+          Cookie: cookie,
+          Origin: ORIGIN,
+          Accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+          "Content-Type": "application/x-www-form-urlencoded",
+          ...(referer ? { Referer: referer } : {}),
+        },
+        body: new URLSearchParams(fields).toString(),
+      });
+    await post("/states", { title: "First" });
+
+    // 409 already_exists: an HTML page with the message and a link back to the form's page.
+    const dup = await browserPost("/states", { title: "Again", id: "first" }, `${ORIGIN}/?x=1`);
+    expect(dup.status).toBe(409);
+    expect(dup.headers.get("Content-Type")).toContain("text/html");
+    const html = await dup.text();
+    expect(html).toContain("State &quot;first&quot; already exists.");
+    expect(html).toContain("already_exists");
+    expect(html).toContain('href="/?x=1" data-action="back"');
+    expect(html).toContain('id="sidenav"');
+
+    // 400 from a form, with the message HTML-escaped and a back link only to this origin.
+    const bad = await browserPost("/s/first/status", { status: "<b>nope</b>" }, "https://evil.example/");
+    expect(bad.status).toBe(400);
+    const badHtml = await bad.text();
+    expect(badHtml).not.toContain("<b>nope</b>");
+    expect(badHtml).toContain('href="/" data-action="back"');
+
+    // 404 pages too.
+    const missing = await app.request("/s/nope", { headers: { Cookie: cookie, Accept: "text/html" } });
+    expect(missing.status).toBe(404);
+    expect(await missing.text()).toContain("<h1>Not found</h1>");
+
+    // fetch() from app.js does not ask for HTML and keeps the JSON; so does the API.
+    const json = await post("/states", { title: "Again", id: "first" });
+    expect(json.status).toBe(409);
+    expect((await json.json()).error.code).toBe("already_exists");
+    const api = await app.request("/api/states/nope", { headers: { Cookie: cookie, Accept: "text/html" } });
+    expect(api.status).toBe(404);
+    expect((await api.json()).error.code).toBe("not_found");
   });
 
   it("blocks cross-site form posts", async () => {

@@ -32,7 +32,7 @@ export const ui = new Hono<AppEnv>();
 
 const JOURNAL_PAGE = 10;
 /** Set by app.js when the side menu is collapsed on a wide screen, so the page renders collapsed without a flash. */
-const NAV_COOKIE = "dura_nav";
+export const NAV_COOKIE = "dura_nav";
 
 // ---------------------------------------------------------------------------
 // Login & setup

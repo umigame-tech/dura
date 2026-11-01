@@ -213,7 +213,11 @@ document.addEventListener("click", async (ev) => {
   el.disabled = true;
   try {
     const action = el.dataset.action;
-    if (action === "login") {
+    if (action === "back") {
+      // Back in history keeps what was typed into the form; with no history (a new tab), follow the link.
+      if (history.length > 1) history.back();
+      else location.href = el.href;
+    } else if (action === "login") {
       await loginWithPasskey();
       location.href = sameSitePath(new URLSearchParams(location.search).get("next"), location.origin);
     } else if (action === "setup") {

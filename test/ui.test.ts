@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
+import { describe, expect, it, vi } from "vitest";
+import { eq, sql } from "drizzle-orm";
 import { journalEntries, passkeys, pushSubscriptions, states } from "../src/db/schema";
 import type { Deps } from "../src/env";
 import { ASSET_VERSION, contentVersion, ICON } from "../src/routes/assets";
@@ -386,6 +386,64 @@ describe("web UI", () => {
     const api = await app.request("/api/states/nope", { headers: { Cookie: cookie, Accept: "text/html" } });
     expect(api.status).toBe(404);
     expect((await api.json()).error.code).toBe("not_found");
+  });
+
+  it("keeps JSON on /auth and /mcp, and sends a logged-out browser to log in", async () => {
+    const { app } = await setup();
+    const html = { Accept: "text/html", "Content-Type": "application/json", Origin: ORIGIN };
+    const auth = await app.request("/auth/register/options", { method: "POST", headers: html, body: JSON.stringify({ setupToken: "wrong" }) });
+    expect(auth.status).toBe(403);
+    expect((await auth.json()).error.code).toBe("forbidden");
+    const mcp = await app.request("/mcp", { headers: { Accept: "text/html" } });
+    expect(mcp.status).toBe(405);
+    expect((await mcp.json()).error.code).toBe("method_not_allowed");
+
+    const post = await app.request("/states", {
+      method: "POST",
+      headers: { Accept: "text/html", Origin: ORIGIN, "Content-Type": "application/x-www-form-urlencoded" },
+      body: "title=X",
+    });
+    expect(post.status).toBe(302);
+    expect(post.headers.get("Location")).toBe("/login");
+  });
+
+  it("shows a page for unknown URLs, rejected posts and server errors", async () => {
+    const { app, cookie, db, post } = await loggedIn();
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const unknown = await app.request("/no/such/page", { headers: { Cookie: cookie, Accept: "text/html" } });
+      expect(unknown.status).toBe(404);
+      expect(await unknown.text()).toContain("There is no page at this address.");
+      expect(await (await app.request("/no/such/page", { headers: { Cookie: cookie } })).text()).toBe("404 Not Found");
+
+      const crossSite = await app.request("/states", {
+        method: "POST",
+        headers: { Cookie: cookie, Accept: "text/html", Origin: "https://evil.example", "Content-Type": "application/x-www-form-urlencoded" },
+        body: "title=X",
+      });
+      expect(crossSite.status).toBe(403);
+      expect(await crossSite.text()).toContain("<h1>Could not complete the request</h1>");
+
+      await post("/states", { title: "First" });
+      db.run(sql`DROP TABLE journal_entries`);
+      const broken = await app.request("/s/first", { headers: { Cookie: cookie, Accept: "text/html" } });
+      expect(broken.status).toBe(500);
+      const brokenHtml = await broken.text();
+      expect(brokenHtml).toContain("<h1>Something went wrong</h1>");
+      expect(brokenHtml).not.toContain("journal_entries");
+      const brokenJson = await app.request("/s/first", { headers: { Cookie: cookie } });
+      expect(brokenJson.status).toBe(500);
+      expect((await brokenJson.json()).error.code).toBe("internal");
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("goes back in history from the error page, except on a modified click", async () => {
+    const { app } = await setup();
+    const js = await (await app.request("/static/app.js")).text();
+    expect(js).toContain('el.dataset.action === "back" && (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey)');
+    expect(js).toMatch(/action === "back"\) \{\s*\/\/[^\n]*\n\s*if \(history\.length > 1\) history\.back\(\);\s*else location\.href = el\.href;/);
   });
 
   it("blocks cross-site form posts", async () => {

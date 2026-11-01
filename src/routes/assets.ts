@@ -207,6 +207,8 @@ async function enablePush(statusEl) {
 document.addEventListener("click", async (ev) => {
   const el = ev.target.closest("[data-action]");
   if (!el) return;
+  // Let a modified click on the "Go back" link open it in a new tab or window, as links do.
+  if (el.dataset.action === "back" && (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey)) return;
   ev.preventDefault();
   const errEl = document.getElementById(el.dataset.error || "error");
   if (errEl) errEl.hidden = true;

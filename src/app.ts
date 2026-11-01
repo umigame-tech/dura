@@ -60,10 +60,21 @@ export function createApp(deps: Deps) {
       }
       return c.json({ error: { code: err.code, message: err.message, ...err.details } }, err.status);
     }
-    if (err instanceof HTTPException) return err.getResponse();
+    if (err instanceof HTTPException) {
+      // e.g. the CSRF check's 403 for a form post from another origin.
+      if (!isApiPath(c.req.path) && wantsHtml(c)) {
+        return htmlError(c, err.status as ContentfulStatusCode, "rejected", err.message || "The request was rejected.");
+      }
+      return err.getResponse();
+    }
     console.error(err);
     if (!isApiPath(c.req.path) && wantsHtml(c)) return htmlError(c, 500, "internal", "Internal server error.");
     return c.json({ error: { code: "internal", message: "Internal server error." } }, 500);
+  });
+
+  app.notFound((c) => {
+    if (!isApiPath(c.req.path) && wantsHtml(c)) return htmlError(c, 404, "not_found", "There is no page at this address.");
+    return c.text("404 Not Found", 404);
   });
 
   // API: bearer tokens (agents) or the browser session (web UI).
@@ -106,17 +117,23 @@ const isApiPath = (path: string) => path.startsWith("/api/") || path.startsWith(
 const wantsHtml = (c: Context<AppEnv>) => /text\/html/.test(c.req.header("Accept") ?? "");
 
 function htmlError(c: Context<AppEnv>, status: ContentfulStatusCode, code: string, message: string) {
-  return c.html(
-    errorPage({
+  try {
+    return c.html(
+      errorPage({
+        status,
+        code,
+        message,
+        back: backLink(c),
+        loggedIn: c.get("actor")?.type === "owner",
+        navCollapsed: getCookie(c, NAV_COOKIE) === "collapsed",
+      }),
       status,
-      code,
-      message,
-      back: backLink(c),
-      loggedIn: c.get("actor")?.type === "owner",
-      navCollapsed: getCookie(c, NAV_COOKIE) === "collapsed",
-    }),
-    status,
-  );
+    );
+  } catch (err) {
+    // An error page that fails to render must not hide the original error.
+    console.error(err);
+    return c.text(`Error (${code}): ${message}\n`, status);
+  }
 }
 
 // The page the form was on, when the browser says so (Referrer-Policy is same-origin), else the state list.
@@ -125,7 +142,7 @@ function backLink(c: Context<AppEnv>): string {
   if (!referer) return "/";
   try {
     const url = new URL(referer);
-    return url.origin === publicOrigin(c) ? url.pathname + url.search + url.hash : "/";
+    return url.origin === publicOrigin(c) ? url.pathname + url.search : "/";
   } catch {
     return "/";
   }

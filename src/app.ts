@@ -1,7 +1,9 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
+import { getCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { HTTPException } from "hono/http-exception";
 import { secureHeaders } from "hono/secure-headers";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { publicOrigin, resolveActor } from "./auth";
 import type { AppEnv, Deps } from "./env";
 import { ApiError } from "./lib/errors";
@@ -9,8 +11,8 @@ import { handleMcp } from "./mcp";
 import { api } from "./routes/api";
 import { assets } from "./routes/assets";
 import { authRoutes } from "./routes/webauthn";
-import { INLINE_SCRIPT_SHA256 } from "./ui/layout";
-import { ui } from "./ui/routes";
+import { errorPage, INLINE_SCRIPT_SHA256 } from "./ui/layout";
+import { NAV_COOKIE, ui } from "./ui/routes";
 
 export function createApp(deps: Deps) {
   const app = new Hono<AppEnv>();
@@ -50,16 +52,29 @@ export function createApp(deps: Deps) {
 
   app.onError((err, c) => {
     if (err instanceof ApiError) {
-      const isApi = c.req.path.startsWith("/api/") || c.req.path.startsWith("/auth/");
+      const isApi = isApiPath(c.req.path);
       if (!isApi && err.status === 401) return c.redirect("/login");
+      if (!isApi && wantsHtml(c)) return htmlError(c, err.status, err.code, err.message);
       if (/text\/(markdown|plain)/.test(c.req.header("Accept") ?? "")) {
         return c.text(`Error (${err.code}): ${err.message}\n`, err.status);
       }
       return c.json({ error: { code: err.code, message: err.message, ...err.details } }, err.status);
     }
-    if (err instanceof HTTPException) return err.getResponse();
+    if (err instanceof HTTPException) {
+      // e.g. the CSRF check's 403 for a form post from another origin.
+      if (!isApiPath(c.req.path) && wantsHtml(c)) {
+        return htmlError(c, err.status as ContentfulStatusCode, "rejected", err.message || "The request was rejected.");
+      }
+      return err.getResponse();
+    }
     console.error(err);
+    if (!isApiPath(c.req.path) && wantsHtml(c)) return htmlError(c, 500, "internal", "Internal server error.");
     return c.json({ error: { code: "internal", message: "Internal server error." } }, 500);
+  });
+
+  app.notFound((c) => {
+    if (!isApiPath(c.req.path) && wantsHtml(c)) return htmlError(c, 404, "not_found", "There is no page at this address.");
+    return c.text("404 Not Found", 404);
   });
 
   // API: bearer tokens (agents) or the browser session (web UI).
@@ -94,4 +109,41 @@ export function createApp(deps: Deps) {
   app.route("/", ui);
 
   return app;
+}
+
+const isApiPath = (path: string) => path.startsWith("/api/") || path.startsWith("/auth/") || path === "/mcp";
+
+// Pages and form posts from a browser ask for HTML; fetch() from app.js (preview, push) does not, and keeps the JSON.
+const wantsHtml = (c: Context<AppEnv>) => /text\/html/.test(c.req.header("Accept") ?? "");
+
+function htmlError(c: Context<AppEnv>, status: ContentfulStatusCode, code: string, message: string) {
+  try {
+    return c.html(
+      errorPage({
+        status,
+        code,
+        message,
+        back: backLink(c),
+        loggedIn: c.get("actor")?.type === "owner",
+        navCollapsed: getCookie(c, NAV_COOKIE) === "collapsed",
+      }),
+      status,
+    );
+  } catch (err) {
+    // An error page that fails to render must not hide the original error.
+    console.error(err);
+    return c.text(`Error (${code}): ${message}\n`, status);
+  }
+}
+
+// The page the form was on, when the browser says so (Referrer-Policy is same-origin), else the state list.
+function backLink(c: Context<AppEnv>): string {
+  const referer = c.req.header("Referer");
+  if (!referer) return "/";
+  try {
+    const url = new URL(referer);
+    return url.origin === publicOrigin(c) ? url.pathname + url.search : "/";
+  } catch {
+    return "/";
+  }
 }

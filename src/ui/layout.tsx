@@ -101,3 +101,27 @@ export function timeAgo(iso: string): string {
 }
 
 export const Time = (props: { iso: string }) => <time datetime={props.iso} title={props.iso}>{timeAgo(props.iso)}</time>;
+
+/**
+ * The page a browser sees when a web UI request fails (src/app.ts), instead of the API's JSON.
+ * `back` is where the "Go back" link points; app.js goes back in history instead, so the form keeps what was typed.
+ */
+export function errorPage(props: { status: number; code: string; message: string; back: string; loggedIn: boolean; navCollapsed: boolean }) {
+  const title = props.status === 404 ? "Not found" : props.status >= 500 ? "Something went wrong" : "Could not complete the request";
+  return (
+    <Layout title={title} loggedIn={props.loggedIn} navCollapsed={props.navCollapsed}>
+      <h1>{title}</h1>
+      <Flash kind="error">
+        <p>{props.message}</p>
+        <p class="muted">
+          HTTP {props.status} · {props.code}
+        </p>
+      </Flash>
+      <p>
+        <a href={props.back} data-action="back">
+          ← Go back
+        </a>
+      </p>
+    </Layout>
+  );
+}

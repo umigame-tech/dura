@@ -207,13 +207,21 @@ async function enablePush(statusEl) {
 document.addEventListener("click", async (ev) => {
   const el = ev.target.closest("[data-action]");
   if (!el) return;
+  // Let a modified click on the "Go back" link open it in a new tab or window, as links do.
+  if (el.dataset.action === "back" && (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey)) return;
   ev.preventDefault();
   const errEl = document.getElementById(el.dataset.error || "error");
   if (errEl) errEl.hidden = true;
   el.disabled = true;
   try {
     const action = el.dataset.action;
-    if (action === "login") {
+    if (action === "back") {
+      // Back in history keeps what was typed into the form. When there is no page of ours to go back to (a link from
+      // another site, or a new tab opened from one of our pages), follow the link instead. Referrer-Policy is
+      // same-origin, so referrer is empty or ours.
+      if (history.length > 1 && document.referrer && new URL(document.referrer).origin === location.origin) history.back();
+      else location.href = el.href;
+    } else if (action === "login") {
       await loginWithPasskey();
       location.href = sameSitePath(new URLSearchParams(location.search).get("next"), location.origin);
     } else if (action === "setup") {

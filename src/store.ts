@@ -1,5 +1,5 @@
 import { and, asc, count, desc, eq, gt, inArray, max, sql } from "drizzle-orm";
-import type { DB } from "./db";
+import { atomic, type DB, type Write } from "./db";
 import { journalEntries, sectionRevisions, sections, states, type StateStatus } from "./db/schema";
 import { ApiError, badRequest, isUniqueViolation, notFound } from "./lib/errors";
 import { ID_PATTERN, nowIso, SECTION_NAME_PATTERN, slugify } from "./lib/util";
@@ -70,21 +70,28 @@ export async function createState(
   }
 
   const ts = nowIso();
-  try {
-    await db.insert(states).values({
+  // The state and its initial sections are written together, so a failure never leaves a half-created state.
+  const writes: [Write, ...Write[]] = [
+    db.insert(states).values({
       id,
       title,
       status: input.status ?? "active",
       statusNote: input.statusNote ?? null,
       createdAt: ts,
       updatedAt: ts,
-    });
+    }),
+  ];
+  for (const [name, content] of Object.entries(input.sections ?? {})) {
+    writes.push(
+      db.insert(sectionRevisions).values({ stateId: id, name, version: 1, content, updatedBy: actor, createdAt: ts }),
+      db.insert(sections).values({ stateId: id, name, content, version: 1, updatedBy: actor, updatedAt: ts }),
+    );
+  }
+  try {
+    await atomic(db, writes);
   } catch (err) {
     if (isUniqueViolation(err)) throw new ApiError(409, "already_exists", `State "${id}" already exists.`);
     throw err;
-  }
-  for (const [name, content] of Object.entries(input.sections ?? {})) {
-    await putSection(db, id, name, content, 0, actor);
   }
   return getState(db, id);
 }
@@ -126,8 +133,9 @@ export async function updateState(
   return { state, previous };
 }
 
-async function touchState(db: DB, id: string) {
-  await db.update(states).set({ updatedAt: nowIso() }).where(eq(states.id, id));
+/** A query that bumps the state's updatedAt; run it with atomic() alongside the write it records. */
+function touchState(db: DB, id: string) {
+  return db.update(states).set({ updatedAt: nowIso() }).where(eq(states.id, id));
 }
 
 // ---------------------------------------------------------------------------
@@ -199,19 +207,23 @@ export async function putSection(
   const ts = nowIso();
   try {
     // Claiming the revision row is the lock: only one writer can create version N+1.
-    await db.insert(sectionRevisions).values({ stateId, name, version, content, updatedBy: actor, createdAt: ts });
+    // The revision, the latest content and the state's updatedAt are written together,
+    // so a failure never leaves a revision without the matching section (or the reverse).
+    await atomic(db, [
+      db.insert(sectionRevisions).values({ stateId, name, version, content, updatedBy: actor, createdAt: ts }),
+      db
+        .insert(sections)
+        .values({ stateId, name, content, version, updatedBy: actor, updatedAt: ts })
+        .onConflictDoUpdate({
+          target: [sections.stateId, sections.name],
+          set: { content, version, updatedBy: actor, updatedAt: ts },
+        }),
+      touchState(db, stateId),
+    ]);
   } catch (err) {
     if (isUniqueViolation(err)) throw conflict(stateId, name, expectedVersion, await findSection(db, stateId, name));
     throw err;
   }
-  await db
-    .insert(sections)
-    .values({ stateId, name, content, version, updatedBy: actor, updatedAt: ts })
-    .onConflictDoUpdate({
-      target: [sections.stateId, sections.name],
-      set: { content, version, updatedBy: actor, updatedAt: ts },
-    });
-  await touchState(db, stateId);
   return (await findSection(db, stateId, name))!;
 }
 
@@ -328,8 +340,7 @@ export async function appendJournal(
     const seq = (await lastJournalSeq(db, stateId)) + 1;
     const entry = { stateId, seq, actor, kind, body, createdAt: nowIso() };
     try {
-      await db.insert(journalEntries).values(entry);
-      await touchState(db, stateId);
+      await atomic(db, [db.insert(journalEntries).values(entry), touchState(db, stateId)]);
       return entry;
     } catch (err) {
       if (!isUniqueViolation(err)) throw err;

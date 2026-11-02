@@ -33,5 +33,10 @@ export function slugify(s: string): string {
     .slice(0, 48);
 }
 
-export const ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
-export const SECTION_NAME_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
+// The HTML `pattern` attribute is compiled with the `v` flag, where an unescaped `-`
+// at the end of a class is a syntax error and the browser silently skips validation.
+// Keep `-` escaped so the same source works in forms and here.
+export const ID_PATTERN_SOURCE = "[a-z0-9][a-z0-9_\\-]{0,63}";
+export const SECTION_NAME_PATTERN_SOURCE = "[a-z0-9][a-z0-9_.\\-]{0,63}";
+export const ID_PATTERN = new RegExp(`^${ID_PATTERN_SOURCE}$`);
+export const SECTION_NAME_PATTERN = new RegExp(`^${SECTION_NAME_PATTERN_SOURCE}$`);

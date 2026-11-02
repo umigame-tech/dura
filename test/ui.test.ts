@@ -6,7 +6,7 @@ import type { Deps } from "../src/env";
 import { ASSET_VERSION, contentVersion, ICON } from "../src/routes/assets";
 import { INLINE_SCRIPT, INLINE_SCRIPT_SHA256 } from "../src/ui/layout";
 import { SOURCE_ICON_SHA256 } from "../src/routes/icons";
-import { base64urlEncode } from "../src/lib/util";
+import { base64urlEncode, ID_PATTERN, SECTION_NAME_PATTERN } from "../src/lib/util";
 import { ORIGIN, setup } from "./helpers";
 
 async function loggedIn(overrides: Partial<Deps> = {}) {
@@ -339,6 +339,28 @@ describe("web UI", () => {
     const html = await (await get("/s/x/sections/findings/edit")).text();
     expect(html).toContain('name="version" value="0"');
     expect((await get("/s/x/sections/Bad%20Name/edit")).status).toBe(400);
+  });
+
+  it("uses form patterns that browsers can compile and that match the server's checks", async () => {
+    const { get, post } = await loggedIn();
+    await post("/states", { title: "X", id: "x" });
+    const unescape = (s: string) => s.replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+    const patterns: Record<string, string> = {};
+    for (const [path, field] of [["/", "id"], ["/s/x/new-section", "name"]] as const) {
+      const html = await (await get(path)).text();
+      const input = new RegExp(`<input[^>]*\\bid="${field}"[^>]*>`).exec(html)![0];
+      patterns[field] = unescape(/\bpattern="([^"]*)"/.exec(input)![1]!);
+    }
+    // Browsers compile `pattern` as ^(?:...)$ with the v flag; a syntax error turns validation off.
+    const browser = (p: string) => new RegExp(`^(?:${p})$`, "v");
+    const id = browser(patterns.id!);
+    const name = browser(patterns.name!);
+    for (const value of ["a", "a-b_c", "0-", "a".repeat(64), "", "-a", "A", "a.b", "a b", "a".repeat(65)]) {
+      expect(id.test(value), `id ${JSON.stringify(value)}`).toBe(ID_PATTERN.test(value));
+    }
+    for (const value of ["a", "a.b-c_d", "0-", "a".repeat(64), "", ".a", "-a", "A", "a b", "a".repeat(65)]) {
+      expect(name.test(value), `name ${JSON.stringify(value)}`).toBe(SECTION_NAME_PATTERN.test(value));
+    }
   });
 
   it("shows form errors as a page, not JSON", async () => {

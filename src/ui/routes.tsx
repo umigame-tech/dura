@@ -6,7 +6,7 @@ import { passkeys, pushSubscriptions, STATE_STATUSES, webhooks, WEBHOOK_KINDS, t
 import type { AppEnv } from "../env";
 import { ApiError } from "../lib/errors";
 import { renderMarkdown } from "../lib/markdown";
-import { nowIso, randomToken } from "../lib/util";
+import { ID_PATTERN_SOURCE, nowIso, randomToken, SECTION_NAME_PATTERN_SOURCE } from "../lib/util";
 import { getVapidKeys, notifyStatusChange, pushTo, testNotification, webhookRequest } from "../notify";
 import { passkeyCount } from "../routes/webauthn";
 import {
@@ -156,7 +156,7 @@ ui.get("/", async (c) => {
           </div>
           <div>
             <label for="id">ID (optional)</label>
-            <input id="id" name="id" type="text" placeholder="derived from the title" pattern="[a-z0-9][a-z0-9_-]{0,63}" />
+            <input id="id" name="id" type="text" placeholder="derived from the title" pattern={ID_PATTERN_SOURCE} />
           </div>
         </div>
         <label for="goal">Goal (optional, becomes the goal section)</label>
@@ -361,7 +361,7 @@ ui.get("/s/:id/new-section", async (c) => {
       <h1>New section</h1>
       <form class="card stack" method="get" action={`/s/${encodeURIComponent(state.id)}/sections/_/edit`}>
         <label for="name">Name</label>
-        <input id="name" name="name" type="text" required pattern="[a-z0-9][a-z0-9_.\-]{0,63}" placeholder="goal, plan, design, tasks, findings…" />
+        <input id="name" name="name" type="text" required pattern={SECTION_NAME_PATTERN_SOURCE} placeholder="goal, plan, design, tasks, findings…" />
         <div>
           <button type="submit">Continue</button>
         </div>

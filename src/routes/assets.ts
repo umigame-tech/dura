@@ -216,8 +216,9 @@ document.addEventListener("click", async (ev) => {
   try {
     const action = el.dataset.action;
     if (action === "back") {
-      // Back in history keeps what was typed into the form; with no history (a new tab), follow the link.
-      if (history.length > 1) history.back();
+      // Back in history keeps what was typed into the form. When the previous page is not ours (a new tab, or a link
+      // from another site), follow the link instead. Referrer-Policy is same-origin, so referrer is empty or ours.
+      if (document.referrer && new URL(document.referrer).origin === location.origin) history.back();
       else location.href = el.href;
     } else if (action === "login") {
       await loginWithPasskey();

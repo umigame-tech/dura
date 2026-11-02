@@ -439,11 +439,15 @@ describe("web UI", () => {
     }
   });
 
+  // The tests have no DOM, so this checks the served code; the behavior was checked by hand in Chromium (typed text kept
+  // after going back, Ctrl+click opens a new tab, a page opened directly follows the link).
   it("goes back in history from the error page, except on a modified click", async () => {
     const { app } = await setup();
     const js = await (await app.request("/static/app.js")).text();
     expect(js).toContain('el.dataset.action === "back" && (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey)');
-    expect(js).toMatch(/action === "back"\) \{\s*\/\/[^\n]*\n\s*if \(history\.length > 1\) history\.back\(\);\s*else location\.href = el\.href;/);
+    expect(js).toContain(
+      'if (document.referrer && new URL(document.referrer).origin === location.origin) history.back();\n      else location.href = el.href;',
+    );
   });
 
   it("blocks cross-site form posts", async () => {

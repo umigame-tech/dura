@@ -446,7 +446,7 @@ describe("web UI", () => {
     const js = await (await app.request("/static/app.js")).text();
     expect(js).toContain('el.dataset.action === "back" && (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey)');
     expect(js).toContain(
-      'if (document.referrer && new URL(document.referrer).origin === location.origin) history.back();\n      else location.href = el.href;',
+      'if (history.length > 1 && document.referrer && new URL(document.referrer).origin === location.origin) history.back();\n      else location.href = el.href;',
     );
   });
 

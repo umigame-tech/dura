@@ -14,6 +14,8 @@ export type Write = BatchItem<"sqlite">;
  * D1 has no interactive transactions, but `batch` runs the statements in one transaction.
  * better-sqlite3 has no `batch`; there a synchronous transaction runs them on the same connection,
  * so no other request's query can interleave.
+ * The driver is told apart by whether it has `batch` (drizzle's D1 driver does, its better-sqlite3 driver does not);
+ * test/atomic.test.ts and test/d1.test.ts run each path on the real driver.
  */
 export async function atomic(db: DB, queries: readonly [Write, ...Write[]]): Promise<void> {
   const batchable = db as unknown as { batch?: (q: readonly [Write, ...Write[]]) => Promise<unknown> };

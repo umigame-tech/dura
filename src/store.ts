@@ -82,10 +82,7 @@ export async function createState(
     }),
   ];
   for (const [name, content] of Object.entries(input.sections ?? {})) {
-    writes.push(
-      db.insert(sectionRevisions).values({ stateId: id, name, version: 1, content, updatedBy: actor, createdAt: ts }),
-      db.insert(sections).values({ stateId: id, name, content, version: 1, updatedBy: actor, updatedAt: ts }),
-    );
+    writes.push(...sectionWrites(db, { stateId: id, name, content, version: 1, actor, ts }));
   }
   try {
     await atomic(db, writes);
@@ -120,6 +117,8 @@ export async function updateState(
     values.status = patch.status;
   }
   if (patch.statusNote !== undefined) values.statusNote = patch.statusNote || null;
+  // Not atomic with the status journal entry below: if appending fails, the status change stays without its entry.
+  // Doing both in one atomic() needs the journal seq assigned up front; left for the updateState race task (#5-8).
   await db.update(states).set(values).where(eq(states.id, id));
   const state = await getState(db, id);
 
@@ -174,6 +173,27 @@ function conflict(stateId: string, name: string, sent: number, current: Section 
 }
 
 /**
+ * The queries that store one version of a section: its revision, then the latest content.
+ * The revision goes first so that its primary key (the optimistic lock) fails before anything else is written.
+ */
+function sectionWrites(
+  db: DB,
+  w: { stateId: string; name: string; content: string; version: number; actor: string; ts: string },
+): [Write, Write] {
+  const { stateId, name, content, version, actor, ts } = w;
+  return [
+    db.insert(sectionRevisions).values({ stateId, name, version, content, updatedBy: actor, createdAt: ts }),
+    db
+      .insert(sections)
+      .values({ stateId, name, content, version, updatedBy: actor, updatedAt: ts })
+      .onConflictDoUpdate({
+        target: [sections.stateId, sections.name],
+        set: { content, version, updatedBy: actor, updatedAt: ts },
+      }),
+  ];
+}
+
+/**
  * Writes the full content of a section.
  * expectedVersion is the version the caller based its edit on (0 = section must not exist yet);
  * null means the caller sent no If-Match, which is only allowed when creating.
@@ -209,17 +229,7 @@ export async function putSection(
     // Claiming the revision row is the lock: only one writer can create version N+1.
     // The revision, the latest content and the state's updatedAt are written together,
     // so a failure never leaves a revision without the matching section (or the reverse).
-    await atomic(db, [
-      db.insert(sectionRevisions).values({ stateId, name, version, content, updatedBy: actor, createdAt: ts }),
-      db
-        .insert(sections)
-        .values({ stateId, name, content, version, updatedBy: actor, updatedAt: ts })
-        .onConflictDoUpdate({
-          target: [sections.stateId, sections.name],
-          set: { content, version, updatedBy: actor, updatedAt: ts },
-        }),
-      touchState(db, stateId),
-    ]);
+    await atomic(db, [...sectionWrites(db, { stateId, name, content, version, actor, ts }), touchState(db, stateId)]);
   } catch (err) {
     if (isUniqueViolation(err)) throw conflict(stateId, name, expectedVersion, await findSection(db, stateId, name));
     throw err;

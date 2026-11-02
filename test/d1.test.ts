@@ -1,0 +1,92 @@
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { drizzle } from "drizzle-orm/d1";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { getPlatformProxy } from "wrangler";
+import type { DB } from "../src/db";
+import * as schema from "../src/db/schema";
+import { appendJournal, createState, findSection, findState, listJournal, putSection } from "../src/store";
+
+// The same atomic writes as test/atomic.test.ts, on the real drizzle D1 driver (batch) against wrangler's local D1.
+describe("atomic writes on D1", () => {
+  let proxy: Awaited<ReturnType<typeof getPlatformProxy<{ DB: D1Database }>>>;
+  let d1: D1Database;
+  let db: DB;
+  const persist = mkdtempSync(join(tmpdir(), "dura-d1-"));
+
+  beforeAll(async () => {
+    proxy = await getPlatformProxy<{ DB: D1Database }>({
+      configPath: resolve(__dirname, "../wrangler.toml"),
+      persist: { path: persist },
+    });
+    d1 = proxy.env.DB;
+    const dir = resolve(__dirname, "../drizzle");
+    for (const file of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
+      for (const stmt of readFileSync(join(dir, file), "utf8").split("--> statement-breakpoint")) {
+        if (stmt.trim()) await d1.prepare(stmt).run();
+      }
+    }
+    db = drizzle(d1, { schema }) as unknown as DB;
+  }, 60_000);
+
+  afterAll(async () => {
+    await proxy?.dispose();
+    rmSync(persist, { recursive: true, force: true });
+  });
+
+  const count = async (table: string, stateId: string) =>
+    (await d1.prepare(`SELECT count(*) AS n FROM ${table} WHERE state_id = ?`).bind(stateId).first<{ n: number }>())?.n;
+
+  it("rolls back a state whose initial section fails, and reports a real duplicate as already_exists", async () => {
+    await d1.exec(
+      "CREATE TRIGGER fail_boom BEFORE INSERT ON sections WHEN NEW.name = 'boom' BEGIN SELECT RAISE(ABORT, 'boom'); END",
+    );
+    try {
+      await expect(createState(db, { id: "c", title: "C", sections: { goal: "g", boom: "x" } }, "me")).rejects.toThrow(
+        /boom/,
+      );
+      expect(await findState(db, "c")).toBeUndefined();
+      expect(await count("section_revisions", "c")).toBe(0);
+    } finally {
+      await d1.exec("DROP TRIGGER fail_boom");
+    }
+    await createState(db, { id: "c", title: "C", sections: { goal: "g" } }, "me");
+    await expect(createState(db, { id: "c", title: "C" }, "me")).rejects.toMatchObject({ code: "already_exists" });
+  });
+
+  it("rolls back a section write and a journal entry when touching the state fails", async () => {
+    await createState(db, { id: "p", title: "P", sections: { plan: "v1" } }, "me");
+    await d1.exec(
+      "CREATE TRIGGER fail_touch BEFORE UPDATE ON states WHEN NEW.id = 'p' BEGIN SELECT RAISE(ABORT, 'touch'); END",
+    );
+    try {
+      // A trigger failure is not a version conflict, even though D1 calls it SQLITE_CONSTRAINT.
+      await expect(putSection(db, "p", "plan", "v2", 1, "me")).rejects.toThrow(/touch/);
+      await expect(appendJournal(db, "p", "me", "note", "x")).rejects.toThrow(/touch/);
+      expect(await count("section_revisions", "p")).toBe(1);
+      expect(await count("journal_entries", "p")).toBe(0);
+    } finally {
+      await d1.exec("DROP TRIGGER fail_touch");
+    }
+    expect((await putSection(db, "p", "plan", "v2", 1, "me")).version).toBe(2);
+  });
+
+  it("lets exactly one concurrent section writer win with version_conflict for the other", async () => {
+    await createState(db, { id: "r", title: "R", sections: { plan: "v1" } }, "me");
+    const results = await Promise.allSettled([
+      putSection(db, "r", "plan", "a", 1, "me"),
+      putSection(db, "r", "plan", "b", 1, "me"),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({ code: "version_conflict" });
+    expect((await findSection(db, "r", "plan"))?.version).toBe(2);
+  });
+
+  it("retries concurrent journal appends on the next seq", async () => {
+    await createState(db, { id: "j", title: "J" }, "me");
+    await Promise.all(Array.from({ length: 5 }, (_, i) => appendJournal(db, "j", "me", "note", `n${i}`)));
+    expect((await listJournal(db, "j")).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+});

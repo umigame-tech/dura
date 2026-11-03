@@ -42,7 +42,7 @@ A one-line instruction in your agent configuration can be:
 
 If your client is connected to dura over MCP (\`POST ${origin}/mcp\` with the same bearer token),
 the tools map to the CLI commands below: \`list_states\` (list), \`show_state\` (show),
-\`read_journal\` (journal), \`get_section\`, \`put_section\`, \`replace_in_section\` (section),
+\`read_journal\` (journal), \`get_journal_entry\` (journal <seq>), \`get_section\`, \`put_section\`, \`replace_in_section\` (section),
 \`get_summary\`, \`put_summary\` (summary), \`append_journal\` (log) and \`set_status\` (status). Pass the state id as \`state\` and
 follow the same procedure.
 
@@ -96,6 +96,21 @@ continue with \`dura journal --after <last-page-seq> --limit 1000\`, using the
 last seq from the page just read. Repeat until a page contains fewer than 1000
 entries. Use \`journal\` for subsequent pages so sections are fetched only once.
 Keep the last seq you read so you can resume without skipping entries.
+
+To look back from the latest entries instead, pass \`--before\` (not together with \`--after\`).
+It returns the newest entries before that seq, still oldest first; a large value gives the latest:
+
+    dura journal --before 1000000000 --limit 20
+
+If older entries remain, the output ends with
+\`Older entries before #X are not shown and have not been read. Continue with before=X.\`
+Entries you skipped this way are unread: do not treat them as read.
+
+\`--max-chars <n>\` (show and journal) cuts longer entry bodies to n characters and marks each cut
+with the full length. Read a whole entry by its seq:
+
+    dura journal --before 1000000000 --limit 20 --max-chars 500
+    dura journal 37
 
 One section (raw Markdown on stdout; its version on stderr):
 
@@ -218,6 +233,14 @@ New journal entries only:
     curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
       "$DURA_URL/api/states/$DURA_STATE/journal?after=41&limit=1000"
 
+The newest entries before a seq (oldest first; JSON has \`olderBefore\`, the next \`before\`, or null),
+bodies cut to 500 characters, and one whole entry:
+
+    curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
+      "$DURA_URL/api/states/$DURA_STATE/journal?before=1000000000&limit=20&maxChars=500"
+    curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
+      "$DURA_URL/api/states/$DURA_STATE/journal/37"
+
 ### Write with HTTP
 
 Report your work (sub-agents should do this when they finish):
@@ -261,7 +284,7 @@ After confirming the title and goal with the human, create a new state
 
     GET    /api/states                                   list states (?status=)
     POST   /api/states                                   create {id?, title, status?, statusNote?, sections?}
-    GET    /api/states/:id                               state, summary, sections and journal (?after=, ?limit=)
+    GET    /api/states/:id                               state, summary, sections and journal (?after=, ?limit=, ?maxChars=)
     PATCH  /api/states/:id                               {title?, status?, statusNote?}
     GET    /api/states/:id/sections/:name                one section
     PUT    /api/states/:id/sections/:name                write whole section (If-Match: version)
@@ -270,7 +293,8 @@ After confirming the title and goal with the human, create a new state
     GET    /api/states/:id/summary                       journal summary and its coveredThroughSeq
     PUT    /api/states/:id/summary                       {content, coveredThroughSeq} (If-Match: version)
     GET    /api/states/:id/summary/revisions             every version of the summary
-    GET    /api/states/:id/journal                       entries (?after=, ?limit=)
+    GET    /api/states/:id/journal                       entries (?after= or ?before=, ?limit=, ?maxChars=)
+    GET    /api/states/:id/journal/:seq                  one whole entry
     POST   /api/states/:id/journal                       append {kind, body} or Markdown body with ?kind=
     GET    /api/guide                                    this document
     POST   /mcp                                          MCP (Streamable HTTP, stateless, bearer token)

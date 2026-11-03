@@ -12,7 +12,9 @@ import {
   findSection,
   findState,
   findSummary,
+  getJournalEntry,
   listJournal,
+  listJournalBefore,
   putSection,
   putSummary,
 } from "../src/store";
@@ -97,6 +99,18 @@ describe("atomic writes on D1", () => {
     await createState(db, { id: "j", title: "J" }, "me");
     await Promise.all(Array.from({ length: 5 }, (_, i) => appendJournal(db, "j", "me", "note", `n${i}`)));
     expect((await listJournal(db, "j")).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("reads the newest entries before a seq, and one entry by seq", async () => {
+    await createState(db, { id: "b", title: "B" }, "me");
+    for (let i = 1; i <= 5; i++) await appendJournal(db, "b", "me", "note", `n${i}`);
+    const latest = await listJournalBefore(db, "b", { before: Number.MAX_SAFE_INTEGER, limit: 2 });
+    expect(latest.entries.map((e) => e.seq)).toEqual([4, 5]);
+    expect(latest.olderBefore).toBe(4);
+    const oldest = await listJournalBefore(db, "b", { before: 3, limit: 2 });
+    expect(oldest).toMatchObject({ entries: [{ seq: 1 }, { seq: 2 }], olderBefore: null });
+    expect((await getJournalEntry(db, "b", 3)).body).toBe("n3");
+    await expect(getJournalEntry(db, "b", 9)).rejects.toMatchObject({ code: "journal_entry_not_found" });
   });
 
   it("writes the journal summary atomically and lets one concurrent writer win", async () => {

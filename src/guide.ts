@@ -38,12 +38,12 @@ To use a locally built CLI instead, run \`npm run cli:build\` in the dura reposi
 or run \`npm link ./cli\` there to make \`dura\` available on PATH.
 A one-line instruction in your agent configuration can be:
 
-    Manage work state with dura. First read $DURA_URL/api/guide, then follow its Reading procedure through every journal page before choosing work.
+    Manage work state with dura. First read $DURA_URL/api/guide, then follow its Reading procedure (summary first, then every unread journal page) before choosing work.
 
 If your client is connected to dura over MCP (\`POST ${origin}/mcp\` with the same bearer token),
 the tools map to the CLI commands below: \`list_states\` (list), \`show_state\` (show),
 \`read_journal\` (journal), \`get_section\`, \`put_section\`, \`replace_in_section\` (section),
-\`append_journal\` (log) and \`set_status\` (status). Pass the state id as \`state\` and
+\`get_summary\`, \`put_summary\` (summary), \`append_journal\` (log) and \`set_status\` (status). Pass the state id as \`state\` and
 follow the same procedure.
 
 ## Model
@@ -56,17 +56,28 @@ A **state** has a status and two kinds of content:
   Usually only the orchestrator edits sections.
 - **Journal** (append-only Markdown entries with a \`kind\` such as \`report\`, \`decision\`, \`note\`).
   Appends never conflict, so sub-agents running in parallel report here.
+- **Journal summary** (optional, one per state): a Markdown summary of the journal for resuming,
+  saved together with \`coveredThroughSeq\`, the last journal seq it reflects. It is versioned
+  like a section. A new session reads the summary and only the journal entries after that seq.
 
 Status is one of \`active\`, \`waiting\`, \`completed\`, \`abandoned\`.
 Changing it to \`waiting\` or \`completed\` notifies the human.
 
 ## Reading
 
+First check for a journal summary:
+
+    dura summary get
+
+If it exists, its covered seq is printed on stderr (\`covers journal through #41\`). Read it,
+then start below with \`--after 41\` instead of 0: the summary stands in for the older entries.
+If it does not exist (\`summary_not_found\`), read the whole journal as below.
+
 Start with the sections and the first page of unread journal entries:
 
     dura show --after <last-read-seq> --limit 1000
 
-Use 0 for \`<last-read-seq>\` if you have no saved cursor. This returns at most
+Use the summary's covered seq, or 0 if there is no summary and you have no saved cursor. This returns at most
 1000 journal entries, not necessarily the latest page. Complete the paging
 procedure below before choosing work.
 
@@ -118,6 +129,15 @@ Replace a whole section (omit \`--version\` only when creating a new section):
 
     dura section put plan --version 7 < plan.md
 
+Update the journal summary when the journal has grown (the orchestrator does this).
+Write the current situation, key decisions, open questions and next steps, and pass with
+\`--covered\` the last seq you actually read and reflected. Never pass a newer seq: entries
+appended while you were writing must stay unread for the next session. Pass the summary
+version you read (omit \`--version\` only when creating the summary):
+
+    dura summary get
+    dura summary put --covered 41 --version 3 < summary.md
+
 Change the status. Use \`waiting\` when you need a human decision and put the question
 in \`--note\`; use \`completed\` with a short summary when all goal criteria are met:
 
@@ -139,6 +159,10 @@ goal with the human, then use the REST API below (with a token permitted to crea
 - \`422 old_not_found\` / \`old_not_unique\`: copy the text to replace exactly from a fresh read,
   with enough context to be unique.
 - \`428 precondition_required\`: the section exists; read it and pass \`--version\`.
+- \`422 seq_out_of_range\` (summary): \`--covered\` is beyond the last journal entry.
+
+The same version rules apply to the journal summary: on a conflict, read it again with
+\`dura summary get\`, read the journal after its covered seq, merge, and retry.
 
 For a section error, run \`dura section get <name>\` to read the current content
 and version before retrying. The CLI prints a next-step hint when a request fails.
@@ -149,12 +173,14 @@ REST error responses are JSON: \`{"error": {"code": "...", "message": "..."}}\`.
 
 ## Suggested loop
 
-1. Orchestrator: run \`dura show --after <last-read-seq> --limit 1000\` (use 0 if unknown).
+1. Orchestrator: run \`dura summary get\`, then \`dura show --after <seq> --limit 1000\`, where
+   \`<seq>\` is the summary's covered seq (0 if there is no summary).
    If the journal page is full, continue with \`dura journal --after <last-page-seq> --limit 1000\`
    until a page contains fewer than 1000 entries. Read all pages before choosing work.
 2. Pick the next task and hand it to a sub-agent together with \`DURA_STATE\`.
 3. Sub-agent: do the work, then append a report with \`dura log --kind report\`.
 4. Orchestrator: read new reports, update \`tasks\` / \`design\` with targeted replacements, repeat.
+   When the journal has grown, update the summary with \`dura summary put --covered <seq>\`.
 5. When the done-criteria in \`goal\` are met, set status \`completed\` with a summary.
    If you are blocked on a human decision, set \`waiting\` with the question and stop.
 
@@ -174,6 +200,13 @@ Read the sections and the first journal page:
 The document ends with the last returned journal seq. If a page has 1000 entries,
 continue with the journal endpoint using that seq as after until a page has fewer
 entries. Save the last seq for your next session; use the same procedure as Reading above.
+
+The journal summary (raw Markdown; its version is in \`ETag\` and the covered seq in
+\`X-Covered-Through-Seq\`; \`404 summary_not_found\` if there is none). The state document above also
+starts with it. Read the journal after the covered seq:
+
+    curl -sS -i -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
+      "$DURA_URL/api/states/$DURA_STATE/summary"
 
 One section (raw Markdown; its version is in the \`ETag\` header):
 
@@ -204,6 +237,12 @@ Replace a whole section (omit \`If-Match\` only when creating a new section):
     curl -sS -X PUT -H "Authorization: Bearer $DURA_TOKEN" -H "Content-Type: text/markdown" \\
       -H "If-Match: 7" --data-binary @plan.md "$DURA_URL/api/states/$DURA_STATE/sections/plan"
 
+Write the journal summary with the last journal seq it reflects (omit \`If-Match\` only when creating it):
+
+    jq -n --rawfile content summary.md '{content: $content, coveredThroughSeq: 41}' |
+      curl -sS -X PUT -H "Authorization: Bearer $DURA_TOKEN" -H "Content-Type: application/json" \\
+        -H "If-Match: 3" --data-binary @- "$DURA_URL/api/states/$DURA_STATE/summary"
+
 Change the status. Use \`waiting\` when you need a human decision and put the question in \`statusNote\`;
 use \`completed\` with a short summary when the goal's done-criteria are met:
 
@@ -222,12 +261,15 @@ After confirming the title and goal with the human, create a new state
 
     GET    /api/states                                   list states (?status=)
     POST   /api/states                                   create {id?, title, status?, statusNote?, sections?}
-    GET    /api/states/:id                               state, sections and journal (?after=, ?limit=)
+    GET    /api/states/:id                               state, summary, sections and journal (?after=, ?limit=)
     PATCH  /api/states/:id                               {title?, status?, statusNote?}
     GET    /api/states/:id/sections/:name                one section
     PUT    /api/states/:id/sections/:name                write whole section (If-Match: version)
     POST   /api/states/:id/sections/:name/replace        {old, new, replaceAll?} (If-Match required)
     GET    /api/states/:id/sections/:name/revisions      every version of a section
+    GET    /api/states/:id/summary                       journal summary and its coveredThroughSeq
+    PUT    /api/states/:id/summary                       {content, coveredThroughSeq} (If-Match: version)
+    GET    /api/states/:id/summary/revisions             every version of the summary
     GET    /api/states/:id/journal                       entries (?after=, ?limit=)
     POST   /api/states/:id/journal                       append {kind, body} or Markdown body with ?kind=
     GET    /api/guide                                    this document

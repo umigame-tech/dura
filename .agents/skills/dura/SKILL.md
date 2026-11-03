@@ -57,10 +57,18 @@ S="$DURA_STATE"; AUTH="Authorization: Bearer $DURA_TOKEN"
    curl -sS "$DURA_URL/api/guide"
    ```
 
-2. State を読む。全セクションとジャーナルが 1 つの Markdown で返る。末尾の `Last journal seq: N` を覚えておく。
+2. 再開用の要約があるか確かめる。あれば、`X-Covered-Through-Seq` が要約に反映済みの journal の seq なので、それを `C` に入れる。`404`（`summary_not_found`）なら要約はまだないので `C=0` にする。
 
    ```bash
-   curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S?limit=1000"
+   curl -sS -i -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S/summary"
+   C=0  # 要約の X-Covered-Through-Seq（要約がなければ 0）
+   ```
+
+   State を読む。要約・全セクション・`C` より後のジャーナルが 1 つの Markdown で返る。末尾の `Last journal seq: N` を覚えておく。
+   要約がそれより前の記録の代わりになるので、`C` 以前を読み直す必要はない。
+
+   ```bash
+   curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S?after=$C&limit=1000"
    ```
 
    ジャーナルは `after` より後の古い順に、1 回で最大 `limit` 件（既定 200、上限 1000）しか返らない。
@@ -88,12 +96,13 @@ S="$DURA_STATE"; AUTH="Authorization: Bearer $DURA_TOKEN"
 
 - **セクション**（`goal` / `design` / `plan` / `tasks` など）: 上書きする Markdown 文書。version で楽観ロックされる。
 - **ジャーナル**: 追記専用の記録。`kind` は `report`（作業報告）、`decision`（決めたこと）、`note` など。
+- **要約**: State ごとに 1 つの、再開用のジャーナルの要約。本文と、反映済みの seq（`coveredThroughSeq`）を 1 つの版として保存する。version で楽観ロックされる。
 - **status**: `active` / `waiting` / `completed` / `abandoned`。`waiting` と `completed` にすると人間のスマートフォンに通知が届く。
 
 役割分担:
 
 - サブエージェントとして呼ばれたとき: セクションは書き換えず、作業結果を `report` としてジャーナルに追記するだけにする。
-- オーケストレーター（または単独で作業するとき）: ジャーナルを読み、`tasks` や `design` を部分置換で更新する。
+- オーケストレーター（または単独で作業するとき）: ジャーナルを読み、`tasks` や `design` を部分置換で更新する。ジャーナルが長くなったら要約も更新する。
 
 ## 書き込み
 
@@ -133,6 +142,19 @@ curl -sS -X PUT -H "$AUTH" -H "Content-Type: text/markdown" -H 'If-Match: 3' \
   --data-binary @plan.md "$DURA_URL/api/states/$S/sections/plan"
 ```
 
+### 再開用の要約を更新する
+
+ジャーナルが長くなったら（目安: 要約の後に 20 件以上たまったら）、オーケストレーターが要約を書き直します。
+現在の状況、重要な決定、未解決の事項、次にやることを書き、`coveredThroughSeq` には**実際に読んで反映した最後の seq** を入れます。
+要約を書いている間に追記された記録まで反映済みにしないでください（次のセッションが読み飛ばしてしまいます）。
+`If-Match` には読んだときの要約の version を入れます（新規作成のときだけ省略）。
+
+```bash
+jq -n --rawfile content summary.md --argjson seq 41 '{content:$content, coveredThroughSeq:$seq}' |
+  curl -sS -X PUT -H "$AUTH" -H "Content-Type: application/json" -H 'If-Match: 3' \
+    --data-binary @- "$DURA_URL/api/states/$S/summary"
+```
+
 ### status を変える
 
 - 人間の判断が必要で止まるとき: `waiting` にし、`statusNote` に質問を具体的に書く。
@@ -152,8 +174,10 @@ curl -sS -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
 | やること | dura CLI |
 | --- | --- |
 | 使い方の正本を読む（トークン不要） | `dura guide` |
-| State を読む | `dura show --after 0 --limit 1000` |
+| State を読む | `dura show --after $C --limit 1000`（`$C` は要約の反映済みの seq、なければ 0） |
 | ジャーナルの続きを読む | `dura journal --after $N --limit 1000` |
+| 要約を読む（version と反映済みの seq は標準エラーに出る） | `dura summary get` |
+| 要約を書き込む | `dura summary put --covered 41 --version 3 < summary.md`（新規作成は `--version` なし） |
 | セクションを 1 つ読む（version は標準エラーに出る） | `dura section get tasks` |
 | 作業報告を追記する | `dura log --kind report < report.md`（短ければ `dura log --kind report "本文"`） |
 | セクションを部分置換する | `dura section replace tasks --version 7 --old "- [ ] CI" --new "- [x] CI"` |
@@ -162,7 +186,8 @@ curl -sS -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
 | 読める State の一覧 | `dura list` |
 
 ```bash
-dura show --after 0 --limit 1000
+dura summary get   # 要約がなければ summary_not_found。反映済みの seq を C とする
+dura show --after $C --limit 1000
 dura log --kind report <<'EOF'
 CI を追加した（#3）。typecheck と test が PR で走る。
 次: CLI の設定まわり。
@@ -192,6 +217,8 @@ dura は `POST $DURA_URL/mcp` で MCP サーバー（Streamable HTTP）を提供
 | `get_section` | `dura section get` | `state`, `name` |
 | `put_section` | `dura section put` | `state`, `name`, `content`, `version`（新規作成は省略） |
 | `replace_in_section` | `dura section replace` | `state`, `name`, `old`, `new`, `replaceAll`, `version`（必須） |
+| `get_summary` | `dura summary get` | `state` |
+| `put_summary` | `dura summary put` | `state`, `content`, `coveredThroughSeq`, `version`（新規作成は省略） |
 | `append_journal` | `dura log` | `state`, `body`, `kind` |
 | `set_status` | `dura status` | `state`, `status`, `note` |
 

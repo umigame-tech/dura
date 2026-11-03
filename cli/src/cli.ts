@@ -23,6 +23,8 @@ Commands:
   section get <name>            Print a section (its version goes to stderr)
   section put <name>            Write a whole section from stdin or --file
   section replace <name>        Replace --old with --new in a section
+  summary get                   Print the journal summary (its version and covered seq go to stderr)
+  summary put                   Write the journal summary from stdin or --file, with --covered
   log [message...]              Append to the journal (message from args, stdin or --file)
   journal                       Print journal entries after --after
   status <status>               Set the status: ${STATUSES.join(" | ")}
@@ -35,8 +37,9 @@ Options:
       --token-stdin             Read the token from stdin (default: $DURA_TOKEN)
       --after <seq>             show / journal: only entries after this seq
       --limit <n>               show / journal: at most n entries
-      --version <n>             section put / replace: the version you read
-      --file <path>             section put / log: read the body from a file
+      --version <n>             section put / replace, summary put: the version you read
+      --covered <seq>           summary put: the last journal seq the summary reflects
+      --file <path>             section put / summary put / log: read the body from a file
       --old <text>              section replace: text to replace (must occur once)
       --new <text>              section replace: replacement text
       --all                     section replace: replace every occurrence
@@ -145,6 +148,23 @@ function parseError(status: number, text: string): ApiErrorBody {
 
 /** What to do next, phrased for the CLI instead of raw HTTP. */
 function hint(err: ResponseError, ctx: { command: string; name?: string; stateId?: string }): string | undefined {
+  if (ctx.command === "summary") {
+    switch (err.body.code) {
+      case "version_conflict":
+        return (
+          "Run `dura summary get`, read the journal after its covered seq (`dura journal --after <seq>`), " +
+          `merge your summary into it, and retry with --version ${err.body.currentVersion ?? "<new version>"}.`
+        );
+      case "precondition_required":
+        return `The summary already exists. Read it with \`dura summary get\` and pass --version ${err.body.currentVersion ?? "<its version>"}.`;
+      case "seq_out_of_range":
+        return "Set --covered to the last journal seq you actually read and reflected in the summary.";
+      case "summary_not_found":
+        return "There is no summary yet: read the journal from the start (`dura journal --after 0`), then write one with `dura summary put` without --version.";
+      case "not_found":
+        return `Check the state id (${ctx.stateId}); \`dura list\` shows the states you can read.`;
+    }
+  }
   const get = ctx.name ? `dura section get ${ctx.name}` : undefined;
   switch (err.body.code) {
     case "version_conflict":
@@ -177,6 +197,7 @@ const OPTIONS = {
   after: { type: "string" },
   limit: { type: "string" },
   version: { type: "string" },
+  covered: { type: "string" },
   file: { type: "string" },
   old: { type: "string" },
   new: { type: "string" },
@@ -279,6 +300,8 @@ export async function run(argv: string[], io: Io): Promise<number> {
       }
       case "section":
         return await section(client, rest, opts, { stateId, body, print, ctx, io });
+      case "summary":
+        return await summary(client, rest, opts, { stateId, body, print, ctx, io });
       case "log": {
         const text = rest.length > 0 ? rest.join(" ") : await body();
         if (!text.trim()) throw new CliError("The journal entry is empty. Pass a message, --file, or pipe it on stdin.");
@@ -369,5 +392,49 @@ async function section(
   if (opts.old === undefined || opts.new === undefined) throw new CliError("section replace needs --old and --new.");
   const payload = JSON.stringify({ old: opts.old, new: opts.new, replaceAll: opts.all ?? false });
   written((await client.request("POST", `${path}/replace`, { body: payload, headers: { "Content-Type": "application/json", ...ifMatch } })).text);
+  return 0;
+}
+
+async function summary(
+  client: Client,
+  args: string[],
+  opts: { version?: string; covered?: string; json?: boolean },
+  h: {
+    stateId: () => string;
+    body: () => Promise<string>;
+    print: (text: string) => void;
+    ctx: { name?: string };
+    io: Io;
+  },
+): Promise<number> {
+  const [sub] = args;
+  if (!sub || !["get", "put"].includes(sub)) throw new CliError("Use `dura summary get|put`.");
+  const path = `/states/${h.stateId()}/summary`;
+
+  if (sub === "get") {
+    if (opts.json) {
+      h.print((await client.request("GET", path)).text);
+      return 0;
+    }
+    const { res, text } = await client.request("GET", path, { headers: MD });
+    h.io.stdout(text.endsWith("\n") ? text : `${text}\n`);
+    const version = /(\d+)/.exec(res.headers.get("ETag") ?? "")?.[1] ?? "?";
+    const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
+    h.io.stderr(`version: ${version}, covers journal through #${covered} (read on with --after ${covered})\n`);
+    return 0;
+  }
+  const covered = intOption(opts.covered, "covered");
+  if (covered === undefined) throw new CliError("summary put needs --covered <the last journal seq the summary reflects>.");
+  const version = intOption(opts.version, "version");
+  const content = await h.body();
+  const { text } = await client.request("PUT", path, {
+    body: JSON.stringify({ content, coveredThroughSeq: covered }),
+    headers: { "Content-Type": "application/json", ...(version !== undefined ? { "If-Match": String(version) } : {}) },
+  });
+  if (opts.json) h.print(text);
+  else {
+    const s = (JSON.parse(text) as { summary: { version: number; coveredThroughSeq: number } }).summary;
+    h.io.stderr(`Wrote the journal summary (version ${s.version}, covers the journal through #${s.coveredThroughSeq}).\n`);
+  }
   return 0;
 }

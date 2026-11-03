@@ -8,17 +8,22 @@ import { notifyStatusChange } from "../notify";
 import {
   appendJournal,
   createState,
+  findSummary,
   getSection,
   getState,
+  getSummary,
   listJournal,
   listRevisions,
+  listSummaryRevisions,
   listSections,
   listStates,
   putSection,
+  putSummary,
   renderStateMarkdown,
   replaceInSection,
   updateState,
   type JournalEntry,
+  type JournalSummary,
   type Section,
 } from "../store";
 
@@ -41,7 +46,7 @@ function ifMatch(c: Context<AppEnv>): number | null {
   const raw = c.req.header("If-Match");
   if (raw === undefined) return null;
   const m = /^\s*(?:W\/)?"?(\d+)"?\s*$/.exec(raw);
-  if (!m) throw badRequest(`If-Match must be a section version number such as 7 (got ${JSON.stringify(raw)}).`);
+  if (!m) throw badRequest(`If-Match must be a version number such as 7 (got ${JSON.stringify(raw)}).`);
   return Number(m[1]);
 }
 
@@ -75,6 +80,16 @@ const isJson = (c: Context<AppEnv>) => (c.req.header("Content-Type") ?? "").incl
 
 function sectionJson(s: Section) {
   return { name: s.name, content: s.content, version: s.version, updatedBy: s.updatedBy, updatedAt: s.updatedAt };
+}
+
+function summaryJson(s: JournalSummary) {
+  return {
+    content: s.content,
+    coveredThroughSeq: s.coveredThroughSeq,
+    version: s.version,
+    updatedBy: s.updatedBy,
+    updatedAt: s.updatedAt,
+  };
 }
 
 function journalJson(e: JournalEntry) {
@@ -133,9 +148,18 @@ api.get("/states/:id", async (c) => {
   const after = intParam(c.req.query("after"), "after") ?? 0;
   const limit = intParam(c.req.query("limit"), "limit");
   const state = await getState(db, id);
-  const [sections, journal] = await Promise.all([listSections(db, id), listJournal(db, id, { after, limit })]);
-  if (wantsMarkdown(c)) return markdown(c, renderStateMarkdown(state, sections, journal, after));
-  return c.json({ state, sections: sections.map(sectionJson), journal: journal.map(journalJson) });
+  const [sections, summary, journal] = await Promise.all([
+    listSections(db, id),
+    findSummary(db, id),
+    listJournal(db, id, { after, limit }),
+  ]);
+  if (wantsMarkdown(c)) return markdown(c, renderStateMarkdown(state, sections, journal, after, summary));
+  return c.json({
+    state,
+    summary: summary ? summaryJson(summary) : null,
+    sections: sections.map(sectionJson),
+    journal: journal.map(journalJson),
+  });
 });
 
 api.patch("/states/:id", async (c) => {
@@ -210,6 +234,55 @@ api.get("/states/:id/sections/:name/revisions", async (c) => {
       createdAt: r.createdAt,
     })),
   });
+});
+
+api.get("/states/:id/summary", async (c) => {
+  const actor = requireActor(c);
+  const id = c.req.param("id");
+  assertRead(actor, id);
+  const summary = await getSummary(c.get("deps").db, id);
+  c.header("ETag", `"${summary.version}"`);
+  if (wantsMarkdown(c)) {
+    c.header("X-Covered-Through-Seq", String(summary.coveredThroughSeq));
+    return markdown(c, summary.content);
+  }
+  return c.json({ summary: summaryJson(summary) });
+});
+
+api.get("/states/:id/summary/revisions", async (c) => {
+  const actor = requireActor(c);
+  const id = c.req.param("id");
+  assertRead(actor, id);
+  const revisions = await listSummaryRevisions(c.get("deps").db, id);
+  return c.json({
+    revisions: revisions.map((r) => ({
+      version: r.version,
+      content: r.content,
+      coveredThroughSeq: r.coveredThroughSeq,
+      updatedBy: r.updatedBy,
+      createdAt: r.createdAt,
+    })),
+  });
+});
+
+api.put("/states/:id/summary", async (c) => {
+  const actor = requireActor(c);
+  const id = c.req.param("id");
+  assertWrite(actor, id);
+  const body = objectBody(await jsonBody<unknown>(c));
+  if (typeof body.content !== "string") throw badRequest("content must be a string.");
+  if (typeof body.coveredThroughSeq !== "number") {
+    throw badRequest("coveredThroughSeq is required and must be a number: the last journal seq the summary reflects.");
+  }
+  const summary = await putSummary(
+    c.get("deps").db,
+    id,
+    { content: body.content, coveredThroughSeq: body.coveredThroughSeq },
+    ifMatch(c),
+    actor.name,
+  );
+  c.header("ETag", `"${summary.version}"`);
+  return c.json({ summary: summaryJson(summary) });
 });
 
 api.get("/states/:id/journal", async (c) => {

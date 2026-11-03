@@ -16,11 +16,12 @@ const STATUSES = ["active", "waiting", "completed", "abandoned"];
 const INSTRUCTIONS = `dura keeps the state of a long-running task outside of any single agent session.
 A state has overwritable, versioned Markdown sections (goal, plan, design, tasks...) and an append-only journal.
 
-Before choosing work, call show_state with after=0 (or the last journal seq you read) and read the goal, plan, tasks and journal.
+Before choosing work, call get_summary. If the state has a journal summary, it covers the journal through a seq: call show_state with after=<that seq> to read the goal, plan, tasks and only the newer entries. Without a summary (summary_not_found), call show_state with after=0 and read the whole journal.
 If a page holds as many journal entries as the limit, continue with read_journal from the last seq shown.
 If the status is waiting, the status note is a question for the human: get their decision before resuming.
 
 Report each milestone with append_journal (kind report): what changed, the result, links, the next step.
+When the journal has grown, update the summary with put_summary (coveredThroughSeq = the last seq you reflected).
 Edit sections with replace_in_section rather than rewriting them, passing the version you read.
 On version_conflict, read the section again, re-apply your change and retry with the new version.
 Set the status to waiting with a concrete question when you need a human decision, and to completed with a summary when every goal criterion is met; both notify the human.
@@ -85,7 +86,7 @@ const MD = { Accept: "text/markdown" };
 const JSON_BODY = { "Content-Type": "application/json" };
 
 /** Returns the body of a successful response, or throws the API error with a next step for MCP. */
-async function ok(res: Response, args: Json): Promise<string> {
+async function ok(res: Response, args: Json, target: "section" | "summary" = "section"): Promise<string> {
   const text = await res.text();
   if (res.ok) return text;
   let code = `http_${res.status}`;
@@ -101,8 +102,28 @@ async function ok(res: Response, args: Json): Promise<string> {
       message = md[2]!;
     }
   }
-  const next = hint(code, args, currentVersion);
+  const next = target === "summary" ? summaryHint(code, args, currentVersion) : hint(code, args, currentVersion);
   throw new ToolError(`${code} (HTTP ${res.status}): ${message}${next ? `\nNext: ${next}` : ""}`);
+}
+
+function summaryHint(code: string, args: Json, currentVersion?: number): string | undefined {
+  const get = `get_summary (state ${JSON.stringify(args.state)})`;
+  switch (code) {
+    case "version_conflict":
+      return (
+        `Call ${get}, read the journal after its coveredThroughSeq, merge your summary into it, ` +
+        `and retry with version ${currentVersion ?? "<new version>"}.`
+      );
+    case "precondition_required":
+      return `The summary already exists. Read it with ${get} and pass version ${currentVersion ?? "<its version>"}.`;
+    case "seq_out_of_range":
+      return "Set coveredThroughSeq to the last journal seq you actually read and reflected in the summary.";
+    case "summary_not_found":
+      return "There is no summary yet: read the journal from after=0, then write one with put_summary without version.";
+    case "not_found":
+      return "Check the state id; list_states shows the states you can read.";
+  }
+  return hint(code, args, currentVersion);
 }
 
 function hint(code: string, args: Json, currentVersion?: number): string | undefined {
@@ -213,6 +234,43 @@ const TOOLS: Tool[] = [
     },
   },
   {
+    name: "get_summary",
+    description:
+      "Read the journal summary: what the journal says so far, condensed for resuming, with the journal seq it covers through. Read it, then only the journal entries after that seq.",
+    inputSchema: object({ state: stateArg }, ["state"]),
+    call: async (args, api) => {
+      const res = await api("GET", `/states/${state(args)}/summary`, { headers: MD });
+      const content = await ok(res, args, "summary");
+      const version = /(\d+)/.exec(res.headers.get("ETag") ?? "")?.[1] ?? "?";
+      const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
+      return `<!-- version: ${version}, covers journal through #${covered}; read the journal with after=${covered} -->\n\n${content}`;
+    },
+  },
+  {
+    name: "put_summary",
+    description:
+      "Write the whole journal summary together with coveredThroughSeq, the last journal seq the summary reflects. Never set it beyond the entries you actually read. Omit `version` only to create the summary; to overwrite, pass the version you read.",
+    inputSchema: object(
+      {
+        state: stateArg,
+        content: { type: "string", description: "Markdown: current situation, key decisions, open questions, next steps" },
+        coveredThroughSeq: { type: "integer", minimum: 0, description: "The last journal seq reflected in content" },
+        version: { type: "integer", minimum: 0, description: "The summary version you read" },
+      },
+      ["state", "content", "coveredThroughSeq"],
+    ),
+    call: async (args, api) => {
+      const version = int(args, "version");
+      const coveredThroughSeq = int(args, "coveredThroughSeq");
+      if (coveredThroughSeq === undefined) throw new ToolError("coveredThroughSeq is required.");
+      const res = await api("PUT", `/states/${state(args)}/summary`, {
+        body: JSON.stringify({ content: str(args, "content", true), coveredThroughSeq }),
+        headers: { ...JSON_BODY, ...(version !== undefined ? { "If-Match": String(version) } : {}) },
+      });
+      return writtenSummary(await ok(res, args, "summary"));
+    },
+  },
+  {
     name: "append_journal",
     description:
       "Append an entry to the journal. Use kind report for work reports (what changed, the result, links, the next step) and decision for decisions.",
@@ -260,6 +318,11 @@ const TOOLS: Tool[] = [
     },
   },
 ];
+
+function writtenSummary(text: string) {
+  const { summary } = JSON.parse(text) as { summary: { version: number; coveredThroughSeq: number } };
+  return `Wrote the journal summary (version ${summary.version}, covers the journal through #${summary.coveredThroughSeq}).`;
+}
 
 function written(text: string) {
   const { section } = JSON.parse(text) as { section: { name: string; version: number } };

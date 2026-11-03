@@ -349,6 +349,52 @@ export async function listJournalBefore(
   return { entries, olderBefore: rows.length > limit ? entries[0]!.seq : null };
 }
 
+/** At most this many search terms, so one query cannot build an unbounded LIKE chain. */
+export const SEARCH_MAX_TERMS = 10;
+export const SEARCH_MAX_QUERY = 500;
+
+/**
+ * Splits a search query into terms: whitespace separates terms and "double quotes" keep a phrase.
+ * Every term must occur in the body (AND).
+ */
+export function searchTerms(q: string): string[] {
+  const terms: string[] = [];
+  for (const m of q.matchAll(/"([^"]*)"|(\S+)/g)) {
+    const term = (m[1] ?? m[2] ?? "").trim();
+    if (term) terms.push(term);
+  }
+  return terms;
+}
+
+const likeEscape = (term: string) => term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+
+/**
+ * Journal entries whose body contains every term (ASCII letters ignore case) and whose kind matches,
+ * newest first, with seq < before. `nextBefore` is the `before` for the next page, or null when no
+ * older match remains.
+ */
+export async function searchJournal(
+  db: DB,
+  stateId: string,
+  opts: { terms: string[]; kind?: string; before?: number; limit?: number },
+): Promise<{ entries: JournalEntry[]; nextBefore: number | null }> {
+  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
+  const conditions = [eq(journalEntries.stateId, stateId)];
+  if (opts.before !== undefined) conditions.push(lt(journalEntries.seq, opts.before));
+  if (opts.kind !== undefined) conditions.push(eq(journalEntries.kind, opts.kind));
+  for (const term of opts.terms) {
+    conditions.push(sql`${journalEntries.body} LIKE ${`%${likeEscape(term)}%`} ESCAPE '\\'`);
+  }
+  const rows = await db
+    .select()
+    .from(journalEntries)
+    .where(and(...conditions))
+    .orderBy(desc(journalEntries.seq))
+    .limit(limit + 1);
+  const entries = rows.slice(0, limit);
+  return { entries, nextBefore: rows.length > limit ? entries.at(-1)!.seq : null };
+}
+
 export async function getJournalEntry(db: DB, stateId: string, seq: number): Promise<JournalEntry> {
   await getState(db, stateId);
   const [row] = await db

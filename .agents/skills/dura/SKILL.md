@@ -178,6 +178,7 @@ curl -sS -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
 | ジャーナルの続きを読む | `dura journal --after $N --limit 1000` |
 | 直近のジャーナルから過去へさかのぼる | `dura journal --before 1000000000 --limit 20`（続きは出力の `before=X`。長い本文は `--max-chars 500` で切る） |
 | ジャーナル 1 件の全文を読む | `dura journal 37` |
+| 過去のジャーナルを検索する（新しい順） | `dura search SQLite --kind decision`（キーワードはすべて含むもの。続きは出力の `before`） |
 | 要約を読む（version と反映済みの seq は標準エラーに出る） | `dura summary get` |
 | 要約を書き込む | `dura summary put --covered 41 --version 3 < summary.md`（新規作成は `--version` なし） |
 | セクションを 1 つ読む（version は標準エラーに出る） | `dura section get tasks` |
@@ -217,6 +218,7 @@ dura は `POST $DURA_URL/mcp` で MCP サーバー（Streamable HTTP）を提供
 | `show_state` | `dura show` | `state`, `after`, `limit` |
 | `read_journal` | `dura journal` | `state`, `after` か `before`, `limit`, `maxChars` |
 | `get_journal_entry` | `dura journal <seq>` | `state`, `seq` |
+| `search_journal` | `dura search` | `state`, `q`, `kind`, `before`, `limit`, `maxChars` |
 | `get_section` | `dura section get` | `state`, `name` |
 | `put_section` | `dura section put` | `state`, `name`, `content`, `version`（新規作成は省略） |
 | `replace_in_section` | `dura section replace` | `state`, `name`, `old`, `new`, `replaceAll`, `version`（必須） |

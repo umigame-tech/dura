@@ -27,6 +27,7 @@ dura log --kind report "Added CI"           Append to the journal (argument, std
 dura journal --after 41                     Journal entries after a seq
 dura journal --before 1000000000 --limit 20 The latest 20 entries (--max-chars 500 cuts long bodies)
 dura journal 37                             One whole journal entry
+dura search SQLite --kind decision          Search the journal, newest first (every keyword must occur)
 dura summary get                            Journal summary to stdout, its version and covered seq to stderr
 dura summary put --covered 41 --version 3 < summary.md  Write the summary (omit --version to create it)
 dura status waiting --note "Which name?"

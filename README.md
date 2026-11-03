@@ -36,6 +36,7 @@ PUT     /api/states/:id/summary                       要約の書き込み {con
 GET     /api/states/:id/summary/revisions             要約の全 revision
 GET     /api/states/:id/journal                       ジャーナル（?after=<seq> か ?before=<seq>、?limit=, ?maxChars=）
 GET     /api/states/:id/journal/:seq                  ジャーナル 1 件の全文
+GET     /api/states/:id/journal/search                ジャーナルの検索（?q=, ?kind=, ?before=, ?limit=, ?maxChars=）
 POST    /api/states/:id/journal                       追記 {kind, body}、または Markdown 本文 + ?kind=
 GET     /api/guide                                    エージェント向けの使い方（Markdown）
 POST    /mcp                                          MCP（Streamable HTTP、下の「MCP」を参照）
@@ -45,6 +46,7 @@ POST    /mcp                                          MCP（Streamable HTTP、�
 - セクションの書き込みは `If-Match` に「読んだときの version」を付けて送ります。古い version で書き込もうとすると `409 version_conflict` を返し、エラーメッセージに次に何をすればよいかを書いて返します。
 - ジャーナルは古い順に返します。`after=<seq>` はその seq より後を、`before=<seq>` はその seq より前のうち新しい `limit` 件を返します（`before` に大きな値を渡すと直近の `limit` 件）。さらに古い記録が残っていれば、JSON の `olderBefore` に次の `before` の値が入り、Markdown では「#X より前は未確認」と明示します。JSON の `latestSeq` は State の最新の seq で、返した範囲より新しい記録があれば Markdown でも未確認と明示します。`after` と `before` は同時に使えません。
 - `maxChars=<n>` を付けると、それより長い本文を先頭 n 文字（コードポイント単位）に切り、省略したことと全体の文字数を示します（JSON では `truncated` と `totalChars`）。全文は `GET /api/states/:id/journal/:seq` で読みます。
+- `GET /api/states/:id/journal/search` は State 内のジャーナルを新しい順に検索します。`q` は空白で区切ったキーワードで、すべてを本文に含む記録を返します（`"..."` で囲むと語句のまま、英字の大文字・小文字は区別しません）。`kind` で種類を絞れ、`q` と `kind` の少なくとも一方が必要です。`limit` は既定 20、上限 100 です。続きがあれば JSON の `nextBefore` に次の `before` の値が入ります。検索は過去の経緯を探すためのもので、要約以降の未読の記録を読む代わりにはなりません。
 - 要約の `coveredThroughSeq` は、書き手が実際に読んで反映した最後の seq です。サーバーが進めることはなく、最新の seq を超える値は `422 seq_out_of_range` になります。要約を書いている間に追記された記録は、次のセッションで未読として読まれます。
 - `replace` は Claude Code や Codex の編集ツールと同じ old/new 方式です。`old` が 1 回だけ現れることを要求し、すべて置換したいときは `replaceAll: true` を付けます。
 - セクションや本文は `Content-Type: text/markdown` の生の本文でも、JSON でも送れます。
@@ -97,6 +99,7 @@ dura log --kind report "CI を追加した"       ジャーナルに追記（本
 dura journal --after 41                     指定した seq より後のジャーナル
 dura journal --before 1000000000 --limit 20 直近 20 件（--max-chars 500 で長い本文を切る）
 dura journal 37                             ジャーナル 1 件の全文
+dura search SQLite --kind decision          ジャーナルを新しい順に検索（キーワードはすべて含むもの、--before で続き）
 dura summary get                            要約を stdout に、version と反映済みの seq を stderr に出します
 dura summary put --covered 41 --version 3 < summary.md  要約の書き込み（新規作成のときは --version を省きます）
 dura status waiting --note "名前はどちらにしますか？"
@@ -144,6 +147,7 @@ claude mcp add --transport http dura https://dura.example.com/mcp --header "Auth
 | `show_state` | `dura show` |
 | `read_journal` | `dura journal`（`after` か `before`、`limit`、`maxChars`） |
 | `get_journal_entry` | `dura journal <seq>` |
+| `search_journal` | `dura search`（`q`、`kind`、`before`、`limit`、`maxChars`） |
 | `get_section` | `dura section get`（先頭に `<!-- version: N -->` が付きます） |
 | `put_section` | `dura section put` |
 | `replace_in_section` | `dura section replace` |

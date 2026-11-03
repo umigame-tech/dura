@@ -371,14 +371,22 @@ export function excerpt(body: string, maxChars: number | undefined): { body: str
   return { body: chars.slice(0, maxChars).join(""), truncated: true, totalChars: chars.length };
 }
 
-/** The fence of a code block left open at the end of `text` (CommonMark: closed by the same character, at least as long). */
+/**
+ * The fence of a code block left open at the end of `text`, following CommonMark: a backtick opening
+ * fence has no backtick in its info string, and a closing fence uses the same character, is at least
+ * as long and has nothing after it. Fences nested in lists or quotes (indented further) are not
+ * tracked; missing one only leaves the excerpt as unbalanced as it was cut.
+ */
 function openFence(text: string): string | undefined {
   let open: string | undefined;
   for (const line of text.split("\n")) {
-    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    if (!fence) continue;
-    if (open === undefined) open = fence;
-    else if (fence[0] === open[0] && fence.length >= open.length) open = undefined;
+    if (open === undefined) {
+      const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (m && !(m[1]![0] === "`" && m[2]!.includes("`"))) open = m[1];
+    } else {
+      const fence = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+      if (fence && fence[0] === open[0] && fence.length >= open.length) open = undefined;
+    }
   }
   return open;
 }

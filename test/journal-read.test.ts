@@ -127,6 +127,17 @@ describe("journal: maxChars and one whole entry", () => {
     expect(closed).toContain("Log:\n\n_[Truncated:");
   });
 
+  it("follows CommonMark for fences: a closing fence has no info string, a backtick opener has no backtick", async () => {
+    const infoInside = "```md\n```js\nx\n```\n" + "y".repeat(40);
+    const inline = "``` a`b\n" + "z".repeat(40);
+    const { call, t } = await withJournal([infoInside, inline]);
+    const md = await (await call(t, "GET", "/api/states/s/journal?maxChars=30", undefined, { Accept: "text/markdown" })).text();
+    // ```md is closed by the bare ``` (not by ```js), so nothing is added after the cut.
+    expect(md).toContain(`\`\`\`\n${"y".repeat(12)}\n\n_[Truncated:`);
+    // "``` a`b" is not a fence (backtick in the info string), so nothing is added either.
+    expect(md).toContain(`\`\`\` a\`b\n${"z".repeat(22)}\n\n_[Truncated:`);
+  });
+
   it("reads one whole entry by seq", async () => {
     const { call, t } = await withJournal(["first", long]);
     const one = await (await call(t, "GET", "/api/states/s/journal/2")).json();

@@ -39,6 +39,18 @@ describe("journal search", () => {
     expect(seqs(split.entries)).toEqual([4]);
     const noPhrase = await (await call(t, "GET", `/api/states/s/journal/search?q=${encodeURIComponent('"truth source"')}`)).json();
     expect(noPhrase.entries).toEqual([]);
+    // An unclosed quote runs to the end instead of becoming part of a term.
+    const unclosed = await (await call(t, "GET", `/api/states/s/journal/search?q=${encodeURIComponent('keep "source of truth')}`)).json();
+    expect(seqs(unclosed.entries)).toEqual([4]);
+  });
+
+  it("finds long and non-ASCII terms", async () => {
+    const long = `${"x".repeat(60)} 長い日本語の語句で検索できることを確かめるための記録です`;
+    const { call, t } = await withJournal([...JOURNAL, ["note", long]]);
+    for (const q of ["x".repeat(60), "長い日本語の語句で検索できることを確かめる"]) {
+      const res = await (await call(t, "GET", `/api/states/s/journal/search?q=${encodeURIComponent(q)}`)).json();
+      expect(seqs(res.entries), q).toEqual([7]);
+    }
   });
 
   it("treats % and _ as plain characters and filters by kind", async () => {

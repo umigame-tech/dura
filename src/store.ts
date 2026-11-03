@@ -354,19 +354,17 @@ export const SEARCH_MAX_TERMS = 10;
 export const SEARCH_MAX_QUERY = 500;
 
 /**
- * Splits a search query into terms: whitespace separates terms and "double quotes" keep a phrase.
- * Every term must occur in the body (AND).
+ * Splits a search query into terms: whitespace separates terms and "double quotes" keep a phrase
+ * (an unclosed quote runs to the end). Every term must occur in the body (AND).
  */
 export function searchTerms(q: string): string[] {
   const terms: string[] = [];
-  for (const m of q.matchAll(/"([^"]*)"|(\S+)/g)) {
+  for (const m of q.matchAll(/"([^"]*)(?:"|$)|([^\s"]+)/g)) {
     const term = (m[1] ?? m[2] ?? "").trim();
     if (term) terms.push(term);
   }
   return terms;
 }
-
-const likeEscape = (term: string) => term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
 
 /**
  * Journal entries whose body contains every term (ASCII letters ignore case) and whose kind matches,
@@ -383,7 +381,9 @@ export async function searchJournal(
   if (opts.before !== undefined) conditions.push(lt(journalEntries.seq, opts.before));
   if (opts.kind !== undefined) conditions.push(eq(journalEntries.kind, opts.kind));
   for (const term of opts.terms) {
-    conditions.push(sql`${journalEntries.body} LIKE ${`%${likeEscape(term)}%`} ESCAPE '\\'`);
+    // instr, not LIKE: D1 rejects LIKE patterns over 50 bytes ("pattern too complex"), which a long
+    // or Japanese term reaches quickly, and instr needs no escaping. lower() folds ASCII only, like LIKE.
+    conditions.push(sql`instr(lower(${journalEntries.body}), lower(${term})) > 0`);
   }
   const rows = await db
     .select()

@@ -44,6 +44,7 @@ describe("mcp", () => {
       "show_state",
       "read_journal",
       "get_journal_entry",
+      "search_journal",
       "get_section",
       "put_section",
       "replace_in_section",

@@ -17,6 +17,7 @@ import {
   listJournalBefore,
   putSection,
   putSummary,
+  searchJournal,
 } from "../src/store";
 
 // The same atomic writes as test/atomic.test.ts, on the real drizzle D1 driver (batch) against wrangler's local D1.
@@ -111,6 +112,27 @@ describe("atomic writes on D1", () => {
     expect(oldest).toMatchObject({ entries: [{ seq: 1 }, { seq: 2 }], olderBefore: null });
     expect((await getJournalEntry(db, "b", 3)).body).toBe("n3");
     await expect(getJournalEntry(db, "b", 9)).rejects.toMatchObject({ code: "journal_entry_not_found" });
+  });
+
+  it("searches the journal literally (long, non-ASCII, % and _) and by kind", async () => {
+    await createState(db, { id: "q", title: "Q" }, "me");
+    for (const [kind, body] of [
+      ["decision", "Use SQLite"],
+      ["report", "100% done with sqlite"],
+      ["decision", "a_b"],
+    ]) {
+      await appendJournal(db, "q", "me", kind!, body!);
+    }
+    expect((await searchJournal(db, "q", { terms: ["sqlite"] })).entries.map((e) => e.seq)).toEqual([2, 1]);
+    expect((await searchJournal(db, "q", { terms: ["100%"] })).entries.map((e) => e.seq)).toEqual([2]);
+    expect((await searchJournal(db, "q", { terms: ["a_b"] })).entries.map((e) => e.seq)).toEqual([3]);
+    expect((await searchJournal(db, "q", { terms: ["e_s"] })).entries).toEqual([]);
+    // D1 rejects LIKE patterns over 50 bytes; long and Japanese terms must still work.
+    await appendJournal(db, "q", "me", "note", `${"y".repeat(60)} 長い日本語の語句で検索できることを確かめる`);
+    expect((await searchJournal(db, "q", { terms: ["y".repeat(60)] })).entries.map((e) => e.seq)).toEqual([4]);
+    expect((await searchJournal(db, "q", { terms: ["長い日本語の語句で検索できることを確かめる"] })).entries.map((e) => e.seq)).toEqual([4]);
+    expect((await searchJournal(db, "q", { terms: ["SQLITE"], kind: "decision" })).entries.map((e) => e.seq)).toEqual([1]);
+    expect((await searchJournal(db, "q", { terms: [], kind: "decision", limit: 1 })).nextBefore).toBe(3);
   });
 
   it("writes the journal summary atomically and lets one concurrent writer win", async () => {

@@ -26,6 +26,10 @@ import {
   putSummary,
   renderStateMarkdown,
   replaceInSection,
+  SEARCH_MAX_QUERY,
+  SEARCH_MAX_TERMS,
+  searchJournal,
+  searchTerms,
   updateState,
   type JournalEntry,
   type JournalSummary,
@@ -349,6 +353,51 @@ api.get("/states/:id/journal", async (c) => {
   const entries = await listJournal(db, id, { after: after ?? 0, limit });
   if (wantsMarkdown(c)) return markdown(c, journalMarkdown(id, entries, { after: after ?? 0 }, maxChars));
   return c.json({ entries: entries.map((e) => journalJson(e, maxChars)) });
+});
+
+function searchMarkdown(
+  stateId: string,
+  entries: JournalEntry[],
+  search: { q?: string; kind?: string; before?: number; nextBefore: number | null },
+  maxChars?: number,
+) {
+  const what = [search.q !== undefined && `q=${JSON.stringify(search.q)}`, search.kind !== undefined && `kind=${search.kind}`]
+    .filter(Boolean)
+    .join(", ");
+  const range = search.before !== undefined ? ` before #${search.before}` : "";
+  const reminder =
+    "_Search finds past entries; it does not replace reading the journal after the summary's covered seq._\n";
+  if (entries.length === 0) return `_No journal entries match ${what}${range}._\n\n${reminder}`;
+  const parts = entries.map((e) => `${journalEntryMarkdown(stateId, e, maxChars)}\n`);
+  let text = `# Journal search: ${what}${range} (newest first)\n\n${parts.join("\n")}\n---\n\n`;
+  text +=
+    search.nextBefore !== null
+      ? `More matches before #${search.nextBefore} are not shown. Continue with before=${search.nextBefore}.\n`
+      : "No more matches.\n";
+  return `${text}${reminder}`;
+}
+
+api.get("/states/:id/journal/search", async (c) => {
+  const actor = requireActor(c);
+  const id = c.req.param("id");
+  assertRead(actor, id);
+  const { db } = c.get("deps");
+  const rawQ = c.req.query("q");
+  const rawKind = c.req.query("kind");
+  const q = rawQ?.trim() ? rawQ.trim() : undefined;
+  const kind = rawKind?.trim() ? rawKind.trim() : undefined;
+  const before = intParam(c.req.query("before"), "before");
+  const limit = intParam(c.req.query("limit"), "limit");
+  const maxChars = maxCharsParam(c);
+  if (q !== undefined && [...q].length > SEARCH_MAX_QUERY) throw badRequest(`q must be at most ${SEARCH_MAX_QUERY} characters.`);
+  const terms = q !== undefined ? searchTerms(q) : [];
+  // q = '""' has no terms, so it would match everything like an empty q.
+  if (terms.length === 0 && kind === undefined) throw badRequest("Pass q (keywords) and/or kind to search the journal.");
+  if (terms.length > SEARCH_MAX_TERMS) throw badRequest(`q may have at most ${SEARCH_MAX_TERMS} terms.`);
+  await getState(db, id);
+  const { entries, nextBefore } = await searchJournal(db, id, { terms, kind, before, limit });
+  if (wantsMarkdown(c)) return markdown(c, searchMarkdown(id, entries, { q, kind, before, nextBefore }, maxChars));
+  return c.json({ entries: entries.map((e) => journalJson(e, maxChars)), nextBefore });
 });
 
 api.get("/states/:id/journal/:seq{[0-9]+}", async (c) => {

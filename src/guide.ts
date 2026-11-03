@@ -42,7 +42,7 @@ A one-line instruction in your agent configuration can be:
 
 If your client is connected to dura over MCP (\`POST ${origin}/mcp\` with the same bearer token),
 the tools map to the CLI commands below: \`list_states\` (list), \`show_state\` (show),
-\`read_journal\` (journal), \`get_journal_entry\` (journal <seq>), \`get_section\`, \`put_section\`, \`replace_in_section\` (section),
+\`read_journal\` (journal), \`get_journal_entry\` (journal <seq>), \`search_journal\` (search), \`get_section\`, \`put_section\`, \`replace_in_section\` (section),
 \`get_summary\`, \`put_summary\` (summary), \`append_journal\` (log) and \`set_status\` (status). Pass the state id as \`state\` and
 follow the same procedure.
 
@@ -112,6 +112,14 @@ with the full length. Read a whole entry by its seq:
 
     dura journal --before 1000000000 --limit 20 --max-chars 500
     dura journal 37
+
+To find a past decision or report, search the journal (newest first). Every keyword must occur
+in the body (ASCII letters ignore case; quote a phrase as one argument), and \`--kind\` filters by kind.
+If more matches remain, the output gives the next \`--before\`. Search does not replace reading the
+entries after the summary's covered seq:
+
+    dura search sqlite migration --kind decision --limit 20 --max-chars 500
+    dura search --kind decision --before 120
 
 One section (raw Markdown on stdout; its version on stderr):
 
@@ -243,6 +251,13 @@ bodies cut to 500 characters, and one whole entry:
     curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
       "$DURA_URL/api/states/$DURA_STATE/journal/37"
 
+Search the journal, newest first (\`q\`: keywords that must all occur, \`"..."\` keeps a phrase; \`kind\`;
+at least one of them; \`limit\` defaults to 20, at most 100; JSON has \`nextBefore\`, the next \`before\` or null):
+
+    curl -sS -G -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
+      --data-urlencode "q=sqlite migration" -d kind=decision \\
+      "$DURA_URL/api/states/$DURA_STATE/journal/search"
+
 ### Write with HTTP
 
 Report your work (sub-agents should do this when they finish):
@@ -297,6 +312,7 @@ After confirming the title and goal with the human, create a new state
     GET    /api/states/:id/summary/revisions             every version of the summary
     GET    /api/states/:id/journal                       entries (?after= or ?before=, ?limit=, ?maxChars=)
     GET    /api/states/:id/journal/:seq                  one whole entry
+    GET    /api/states/:id/journal/search                search (?q=, ?kind=, ?before=, ?limit=, ?maxChars=)
     POST   /api/states/:id/journal                       append {kind, body} or Markdown body with ?kind=
     GET    /api/guide                                    this document
     POST   /mcp                                          MCP (Streamable HTTP, stateless, bearer token)

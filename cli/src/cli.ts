@@ -28,6 +28,7 @@ Commands:
   log [message...]              Append to the journal (message from args, stdin or --file)
   journal                       Print journal entries after --after, or the newest before --before
   journal <seq>                 Print one whole journal entry
+  search [keywords...]          Search the journal, newest first (every keyword must occur; --kind filters)
   status <status>               Set the status: ${STATUSES.join(" | ")}
   guide                         Print the usage guide served by the server (no token needed)
 
@@ -37,16 +38,16 @@ Options:
       --token-file <path>       Read the token from a file (default: $DURA_TOKEN)
       --token-stdin             Read the token from stdin (default: $DURA_TOKEN)
       --after <seq>             show / journal: only entries after this seq
-      --before <seq>            journal: the newest entries before this seq (a large value gives the latest)
-      --limit <n>               show / journal: at most n entries
-      --max-chars <n>           show / journal: cut longer entry bodies to n characters (the cut is marked)
+      --before <seq>            journal / search: the newest entries before this seq (a large value gives the latest)
+      --limit <n>               show / journal / search: at most n entries
+      --max-chars <n>           show / journal / search: cut longer entry bodies to n characters (the cut is marked)
       --version <n>             section put / replace, summary put: the version you read
       --covered <seq>           summary put: the last journal seq the summary reflects
       --file <path>             section put / summary put / log: read the body from a file
       --old <text>              section replace: text to replace (must occur once)
       --new <text>              section replace: replacement text
       --all                     section replace: replace every occurrence
-      --kind <kind>             log: report | decision | note | ... (default: note)
+      --kind <kind>             log: report | decision | note | ... (default: note); search: only this kind
       --note <text>             status: what the human should know or decide
       --status <status>         list: only states with this status
       --json                    Print the JSON response instead of Markdown
@@ -319,6 +320,20 @@ export async function run(argv: string[], io: Io): Promise<number> {
           maxChars: intOption(opts["max-chars"], "max-chars"),
         });
         print((await client.request("GET", `/states/${stateId()}/journal${q}`, { headers: accept })).text);
+        return 0;
+      }
+      case "search": {
+        // The shell already split the words; quote an argument with spaces so it stays one phrase.
+        const q = rest.map((w) => (/\s/.test(w) && !w.includes('"') ? `"${w}"` : w)).join(" ");
+        if (!q.trim() && opts.kind === undefined) throw new CliError("Pass keywords to search for, --kind, or both.");
+        const params = query({
+          q: q.trim() ? q : undefined,
+          kind: opts.kind,
+          before: intOption(opts.before, "before"),
+          limit: intOption(opts.limit, "limit"),
+          maxChars: intOption(opts["max-chars"], "max-chars"),
+        });
+        print((await client.request("GET", `/states/${stateId()}/journal/search${params}`, { headers: accept })).text);
         return 0;
       }
       case "guide": {

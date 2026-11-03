@@ -18,6 +18,7 @@ A state has overwritable, versioned Markdown sections (goal, plan, design, tasks
 
 Before choosing work, call get_summary. If the state has a journal summary, it covers the journal through a seq: call show_state with after=<that seq> to read the goal, plan, tasks and only the newer entries. Without a summary (summary_not_found), call show_state with after=0 and read the whole journal.
 If a page holds as many journal entries as the limit, continue with read_journal from the last seq shown.
+To find a past decision or report, call search_journal (it does not replace reading the unread entries).
 If the status is waiting, the status note is a question for the human: get their decision before resuming.
 
 Report each milestone with append_journal (kind report): what changed, the result, links, the next step.
@@ -207,6 +208,36 @@ const TOOLS: Tool[] = [
       const seq = int(args, "seq");
       if (seq === undefined) throw new ToolError("seq is required.");
       return ok(await api("GET", `/states/${state(args)}/journal/${seq}`, { headers: MD }), args);
+    },
+  },
+  {
+    name: "search_journal",
+    description:
+      "Search past journal entries of a state, newest first: every keyword in `q` must occur in the body (\"double quotes\" keep a phrase; ASCII letters ignore case), and `kind` filters by kind. " +
+      "If more matches remain, the output gives the next `before`. Search finds past decisions; it does not replace reading the journal after the summary's covered seq.",
+    inputSchema: object(
+      {
+        state: stateArg,
+        q: { type: "string", description: "Keywords separated by spaces; all must occur" },
+        kind: { type: "string", description: "Only entries of this kind, e.g. decision" },
+        before: { type: "integer", minimum: 0, description: "Only matches with seq below this (the next page)" },
+        limit: { type: "integer", minimum: 1, maximum: 100, description: "At most this many matches (default 20)" },
+        maxChars: maxCharsArg,
+      },
+      ["state"],
+    ),
+    call: async (args, api) => {
+      const q = str(args, "q");
+      const kind = str(args, "kind");
+      if (!q?.trim() && !kind?.trim()) throw new ToolError("Pass q, kind, or both.");
+      const params = query({
+        q: q?.trim() ? q : undefined,
+        kind: kind?.trim() ? kind : undefined,
+        before: int(args, "before"),
+        limit: int(args, "limit"),
+        maxChars: int(args, "maxChars"),
+      });
+      return ok(await api("GET", `/states/${state(args)}/journal/search${params}`, { headers: MD }), args);
     },
   },
   {

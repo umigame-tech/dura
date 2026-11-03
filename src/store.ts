@@ -379,7 +379,8 @@ export function excerpt(body: string, maxChars: number | undefined): { body: str
  */
 function openFence(text: string): string | undefined {
   let open: string | undefined;
-  for (const line of text.split("\n")) {
+  // CRLF bodies (pasted from Windows) must match too: "." and "[ \t]" do not match "\r".
+  for (const line of text.split(/\r?\n/)) {
     if (open === undefined) {
       const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
       if (m && !(m[1]![0] === "`" && m[2]!.includes("`"))) open = m[1];
@@ -398,7 +399,10 @@ export function journalEntryMarkdown(stateId: string, e: JournalEntry, maxChars?
   let text = x.body.trim();
   // A cut inside a fenced code block would leave it open and swallow the notice and the next entries.
   if (x.truncated) {
-    const fence = openFence(text);
+    // Judge the cut line as it is in the whole body: a cut inside "``` a`b" must not make it look like a fence.
+    // A cut right after a newline ends a line, so the next line is not part of the excerpt.
+    const lineEnd = x.body.endsWith("\n") ? x.body.length : e.body.indexOf("\n", x.body.length);
+    const fence = openFence(lineEnd === -1 ? e.body : e.body.slice(0, lineEnd));
     if (fence) text += `\n${fence}`;
   }
   const lines = [`### #${e.seq} ${e.kind} by ${e.actor} at ${e.createdAt}`, "", text];

@@ -138,6 +138,26 @@ describe("journal: maxChars and one whole entry", () => {
     expect(md).toContain(`\`\`\` a\`b\n${"z".repeat(22)}\n\n_[Truncated:`);
   });
 
+  it("closes fences in CRLF bodies and judges the cut line by the whole body", async () => {
+    const cases: [string, number, string][] = [
+      // CRLF: the fence line ends with \r.
+      ["```js\r\ncode line\r\nmore code\r\n```\r\nafter", 20, "code line\r\nmo\n```\n\n_[Truncated:"],
+      // Tildes, and a shorter fence does not close a longer one.
+      ["~~~~\n~~~\nstill inside\n~~~~\nafter", 15, "~~~\nstill\n~~~~\n\n_[Truncated:"],
+      // A closing fence may have trailing spaces.
+      ["```\ncode\n```  \nplain text after the block", 20, "```  \nplain\n\n_[Truncated:"],
+      // Cut inside the info string of "``` a`b": not a fence in the whole body, so nothing is added.
+      ["``` a`b\nzzz", 5, "``` a\n\n_[Truncated:"],
+      // Cut inside the info string of a real opening fence: the block is open, so it is closed.
+      ["```javascript\nlet x = 1;", 5, "```ja\n```\n\n_[Truncated:"],
+    ];
+    const { call, t } = await withJournal(cases.map((c) => c[0]));
+    for (const [i, [, maxChars, expected]] of cases.entries()) {
+      const md = await (await call(t, "GET", `/api/states/s/journal?after=${i}&limit=1&maxChars=${maxChars}`, undefined, { Accept: "text/markdown" })).text();
+      expect(md, `case ${i}`).toContain(expected);
+    }
+  });
+
   it("reads one whole entry by seq", async () => {
     const { call, t } = await withJournal(["first", long]);
     const one = await (await call(t, "GET", "/api/states/s/journal/2")).json();

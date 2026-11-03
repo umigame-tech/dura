@@ -25,7 +25,7 @@ State の status は `active` / `waiting` / `completed` / `abandoned` の 4 つ�
 ```
 GET     /api/states                                   一覧（?status=）
 POST    /api/states                                   作成 {id?, title, status?, statusNote?, sections?}
-GET     /api/states/:id                               State・要約・全セクション・ジャーナル（?after=, ?limit=）
+GET     /api/states/:id                               State・要約・全セクション・ジャーナル（?after=, ?limit=, ?maxChars=）
 PATCH   /api/states/:id                               {title?, status?, statusNote?}
 GET     /api/states/:id/sections/:name                セクション（ETag に version が入ります）
 PUT     /api/states/:id/sections/:name                全文の書き込み（If-Match: version）
@@ -34,7 +34,8 @@ GET     /api/states/:id/sections/:name/revisions      全 revision
 GET     /api/states/:id/summary                       再開用の要約（ETag に version、X-Covered-Through-Seq に反映済みの seq）
 PUT     /api/states/:id/summary                       要約の書き込み {content, coveredThroughSeq}（If-Match: version）
 GET     /api/states/:id/summary/revisions             要約の全 revision
-GET     /api/states/:id/journal                       ジャーナル（?after=<seq>）
+GET     /api/states/:id/journal                       ジャーナル（?after=<seq> か ?before=<seq>、?limit=, ?maxChars=）
+GET     /api/states/:id/journal/:seq                  ジャーナル 1 件の全文
 POST    /api/states/:id/journal                       追記 {kind, body}、または Markdown 本文 + ?kind=
 GET     /api/guide                                    エージェント向けの使い方（Markdown）
 POST    /mcp                                          MCP（Streamable HTTP、下の「MCP」を参照）
@@ -42,6 +43,8 @@ POST    /mcp                                          MCP（Streamable HTTP、�
 
 - `Accept: text/markdown` を付けると、`GET /api/states/:id` は全セクションと指定位置以降のジャーナルを 1 つの Markdown にまとめて返します。エージェントは 1 回の呼び出しで作業に必要な文脈を読み込めます。
 - セクションの書き込みは `If-Match` に「読んだときの version」を付けて送ります。古い version で書き込もうとすると `409 version_conflict` を返し、エラーメッセージに次に何をすればよいかを書いて返します。
+- ジャーナルは古い順に返します。`after=<seq>` はその seq より後を、`before=<seq>` はその seq より前のうち新しい `limit` 件を返します（`before` に大きな値を渡すと直近の `limit` 件）。さらに古い記録が残っていれば、JSON の `olderBefore` に次の `before` の値が入り、Markdown では「#X より前は未確認」と明示します。JSON の `latestSeq` は State の最新の seq で、返した範囲より新しい記録があれば Markdown でも未確認と明示します。`after` と `before` は同時に使えません。
+- `maxChars=<n>` を付けると、それより長い本文を先頭 n 文字（コードポイント単位）に切り、省略したことと全体の文字数を示します（JSON では `truncated` と `totalChars`）。全文は `GET /api/states/:id/journal/:seq` で読みます。
 - 要約の `coveredThroughSeq` は、書き手が実際に読んで反映した最後の seq です。サーバーが進めることはなく、最新の seq を超える値は `422 seq_out_of_range` になります。要約を書いている間に追記された記録は、次のセッションで未読として読まれます。
 - `replace` は Claude Code や Codex の編集ツールと同じ old/new 方式です。`old` が 1 回だけ現れることを要求し、すべて置換したいときは `replaceAll: true` を付けます。
 - セクションや本文は `Content-Type: text/markdown` の生の本文でも、JSON でも送れます。
@@ -92,6 +95,8 @@ dura section put plan --version 3 < plan.md 全文の書き込み（新規作成
 dura section replace tasks --version 7 --old "- [ ] CI" --new "- [x] CI"
 dura log --kind report "CI を追加した"       ジャーナルに追記（本文は引数、stdin、--file のどれか）
 dura journal --after 41                     指定した seq より後のジャーナル
+dura journal --before 1000000000 --limit 20 直近 20 件（--max-chars 500 で長い本文を切る）
+dura journal 37                             ジャーナル 1 件の全文
 dura summary get                            要約を stdout に、version と反映済みの seq を stderr に出します
 dura summary put --covered 41 --version 3 < summary.md  要約の書き込み（新規作成のときは --version を省きます）
 dura status waiting --note "名前はどちらにしますか？"
@@ -137,7 +142,8 @@ claude mcp add --transport http dura https://dura.example.com/mcp --header "Auth
 | --- | --- |
 | `list_states` | `dura list` |
 | `show_state` | `dura show` |
-| `read_journal` | `dura journal` |
+| `read_journal` | `dura journal`（`after` か `before`、`limit`、`maxChars`） |
+| `get_journal_entry` | `dura journal <seq>` |
 | `get_section` | `dura section get`（先頭に `<!-- version: N -->` が付きます） |
 | `put_section` | `dura section put` |
 | `replace_in_section` | `dura section replace` |

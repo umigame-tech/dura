@@ -8,11 +8,16 @@ import { notifyStatusChange } from "../notify";
 import {
   appendJournal,
   createState,
+  excerpt,
   findSummary,
   getSection,
   getState,
+  getJournalEntry,
   getSummary,
+  journalEntryMarkdown,
+  lastJournalSeq,
   listJournal,
+  listJournalBefore,
   listRevisions,
   listSummaryRevisions,
   listSections,
@@ -37,8 +42,17 @@ const markdown = (c: Context<AppEnv>, body: string, status: 200 | 201 = 200) =>
 
 function intParam(value: string | undefined, name: string): number | undefined {
   if (value === undefined || value === "") return undefined;
-  if (!/^\d+$/.test(value)) throw badRequest(`${name} must be a non-negative integer.`);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+    throw badRequest(`${name} must be a non-negative integer.`);
+  }
   return Number(value);
+}
+
+/** Optional `maxChars`: cut longer journal bodies to this many characters (code points). */
+function maxCharsParam(c: Context<AppEnv>): number | undefined {
+  const n = intParam(c.req.query("maxChars"), "maxChars");
+  if (n === 0) throw badRequest("maxChars must be at least 1.");
+  return n;
 }
 
 /** Accepts `7`, `"7"` and `W/"7"`. */
@@ -92,14 +106,38 @@ function summaryJson(s: JournalSummary) {
   };
 }
 
-function journalJson(e: JournalEntry) {
-  return { seq: e.seq, actor: e.actor, kind: e.kind, body: e.body, createdAt: e.createdAt };
+/** With maxChars, every entry also says whether its body was cut and how long the whole body is. */
+function journalJson(e: JournalEntry, maxChars?: number) {
+  const base = { seq: e.seq, actor: e.actor, kind: e.kind, body: e.body, createdAt: e.createdAt };
+  if (maxChars === undefined) return base;
+  const x = excerpt(e.body, maxChars);
+  return { ...base, body: x.body, truncated: x.truncated, totalChars: x.totalChars };
 }
 
-function journalMarkdown(entries: JournalEntry[], after: number) {
-  if (entries.length === 0) return `_No journal entries after #${after}._\n`;
-  const parts = entries.map((e) => `### #${e.seq} ${e.kind} by ${e.actor} at ${e.createdAt}\n\n${e.body.trim()}\n`);
-  return `${parts.join("\n")}\n---\n\nLast journal seq: ${entries.at(-1)!.seq}.\n`;
+function journalMarkdown(
+  stateId: string,
+  entries: JournalEntry[],
+  page: { after: number } | { before: number; olderBefore: number | null; latestSeq: number },
+  maxChars?: number,
+) {
+  if (entries.length === 0) {
+    return "after" in page ? `_No journal entries after #${page.after}._\n` : `_No journal entries before #${page.before}._\n`;
+  }
+  const parts = entries.map((e) => `${journalEntryMarkdown(stateId, e, maxChars)}\n`);
+  const last = entries.at(-1)!.seq;
+  let text = `${parts.join("\n")}\n---\n\nLast journal seq: ${last}.\n`;
+  if ("before" in page && page.latestSeq > last) {
+    // Paging backwards from an older seq: say that newer entries exist, so "last" is not taken as the latest.
+    text +=
+      `Newer entries after #${last} (through #${page.latestSeq}) are not shown and have not been read. ` +
+      `Read them with after=${last}.\n`;
+  }
+  if ("before" in page && page.olderBefore !== null) {
+    text +=
+      `Older entries before #${page.olderBefore} are not shown and have not been read. ` +
+      `Continue with before=${page.olderBefore}.\n`;
+  }
+  return text;
 }
 
 api.get("/guide", (c) => markdown(c, guideMarkdown(publicOrigin(c))));
@@ -147,18 +185,19 @@ api.get("/states/:id", async (c) => {
   const { db } = c.get("deps");
   const after = intParam(c.req.query("after"), "after") ?? 0;
   const limit = intParam(c.req.query("limit"), "limit");
+  const maxChars = maxCharsParam(c);
   const state = await getState(db, id);
   const [sections, summary, journal] = await Promise.all([
     listSections(db, id),
     findSummary(db, id),
     listJournal(db, id, { after, limit }),
   ]);
-  if (wantsMarkdown(c)) return markdown(c, renderStateMarkdown(state, sections, journal, after, summary));
+  if (wantsMarkdown(c)) return markdown(c, renderStateMarkdown(state, sections, journal, after, summary, maxChars));
   return c.json({
     state,
     summary: summary ? summaryJson(summary) : null,
     sections: sections.map(sectionJson),
-    journal: journal.map(journalJson),
+    journal: journal.map((e) => journalJson(e, maxChars)),
   });
 });
 
@@ -290,11 +329,36 @@ api.get("/states/:id/journal", async (c) => {
   const id = c.req.param("id");
   assertRead(actor, id);
   const { db } = c.get("deps");
+  const after = intParam(c.req.query("after"), "after");
+  const before = intParam(c.req.query("before"), "before");
+  const limit = intParam(c.req.query("limit"), "limit");
+  const maxChars = maxCharsParam(c);
+  if (after !== undefined && before !== undefined) {
+    throw badRequest("Pass either after (newer entries) or before (older entries), not both.");
+  }
   await getState(db, id);
-  const after = intParam(c.req.query("after"), "after") ?? 0;
-  const entries = await listJournal(db, id, { after, limit: intParam(c.req.query("limit"), "limit") });
-  if (wantsMarkdown(c)) return markdown(c, journalMarkdown(entries, after));
-  return c.json({ entries: entries.map(journalJson) });
+  if (before !== undefined) {
+    // Newest first in the query, oldest first in the response, like after.
+    const [{ entries, olderBefore }, latestSeq] = await Promise.all([
+      listJournalBefore(db, id, { before, limit }),
+      lastJournalSeq(db, id),
+    ]);
+    if (wantsMarkdown(c)) return markdown(c, journalMarkdown(id, entries, { before, olderBefore, latestSeq }, maxChars));
+    return c.json({ entries: entries.map((e) => journalJson(e, maxChars)), olderBefore, latestSeq });
+  }
+  const entries = await listJournal(db, id, { after: after ?? 0, limit });
+  if (wantsMarkdown(c)) return markdown(c, journalMarkdown(id, entries, { after: after ?? 0 }, maxChars));
+  return c.json({ entries: entries.map((e) => journalJson(e, maxChars)) });
+});
+
+api.get("/states/:id/journal/:seq{[0-9]+}", async (c) => {
+  const actor = requireActor(c);
+  const id = c.req.param("id");
+  assertRead(actor, id);
+  const seq = intParam(c.req.param("seq"), "seq")!;
+  const entry = await getJournalEntry(c.get("deps").db, id, seq);
+  if (wantsMarkdown(c)) return markdown(c, `${journalEntryMarkdown(id, entry)}\n`);
+  return c.json({ entry: journalJson(entry) });
 });
 
 api.post("/states/:id/journal", async (c) => {

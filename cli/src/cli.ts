@@ -26,7 +26,8 @@ Commands:
   summary get                   Print the journal summary (its version and covered seq go to stderr)
   summary put                   Write the journal summary from stdin or --file, with --covered
   log [message...]              Append to the journal (message from args, stdin or --file)
-  journal                       Print journal entries after --after
+  journal                       Print journal entries after --after, or the newest before --before
+  journal <seq>                 Print one whole journal entry
   status <status>               Set the status: ${STATUSES.join(" | ")}
   guide                         Print the usage guide served by the server (no token needed)
 
@@ -36,7 +37,9 @@ Options:
       --token-file <path>       Read the token from a file (default: $DURA_TOKEN)
       --token-stdin             Read the token from stdin (default: $DURA_TOKEN)
       --after <seq>             show / journal: only entries after this seq
+      --before <seq>            journal: the newest entries before this seq (a large value gives the latest)
       --limit <n>               show / journal: at most n entries
+      --max-chars <n>           show / journal: cut longer entry bodies to n characters (the cut is marked)
       --version <n>             section put / replace, summary put: the version you read
       --covered <seq>           summary put: the last journal seq the summary reflects
       --file <path>             section put / summary put / log: read the body from a file
@@ -180,6 +183,8 @@ function hint(err: ResponseError, ctx: { command: string; name?: string; stateId
       return "Check the token (DURA_TOKEN, --token-file or --token-stdin): it may be missing, mistyped or revoked.";
     case "forbidden":
       return "The token lacks the permission (read-only, or limited to other states).";
+    case "journal_entry_not_found":
+      return "Check the seq: `dura journal --before 1000000000 --limit 1` prints the latest entry and its seq.";
     case "not_found":
       if (ctx.name) return `\`dura show\` lists the sections of ${ctx.stateId}; \`section put\` without --version creates one.`;
       return ctx.stateId ? `Check the state id (${ctx.stateId}); \`dura list\` shows the states you can read.` : undefined;
@@ -195,7 +200,9 @@ const OPTIONS = {
   "token-file": { type: "string" },
   "token-stdin": { type: "boolean" },
   after: { type: "string" },
+  before: { type: "string" },
   limit: { type: "string" },
+  "max-chars": { type: "string" },
   version: { type: "string" },
   covered: { type: "string" },
   file: { type: "string" },
@@ -280,7 +287,11 @@ export async function run(argv: string[], io: Io): Promise<number> {
 
     switch (command) {
       case "show": {
-        const q = query({ after: intOption(opts.after, "after"), limit: intOption(opts.limit, "limit") });
+        const q = query({
+          after: intOption(opts.after, "after"),
+          limit: intOption(opts.limit, "limit"),
+          maxChars: intOption(opts["max-chars"], "max-chars"),
+        });
         print((await client.request("GET", `/states/${stateId()}${q}`, { headers: accept })).text);
         return 0;
       }
@@ -289,7 +300,24 @@ export async function run(argv: string[], io: Io): Promise<number> {
         return 0;
       }
       case "journal": {
-        const q = query({ after: intOption(opts.after, "after"), limit: intOption(opts.limit, "limit") });
+        if (rest.length > 0) {
+          const seq = rest[0]!;
+          if (rest.length > 1 || !/^\d+$/.test(seq)) throw new CliError("Use `dura journal <seq>` with one journal seq.");
+          if ([opts.after, opts.before, opts.limit, opts["max-chars"]].some((v) => v !== undefined)) {
+            throw new CliError("`dura journal <seq>` prints one whole entry; drop --after, --before, --limit and --max-chars.");
+          }
+          print((await client.request("GET", `/states/${stateId()}/journal/${seq}`, { headers: accept })).text);
+          return 0;
+        }
+        if (opts.after !== undefined && opts.before !== undefined) {
+          throw new CliError("Pass either --after (newer entries) or --before (older entries), not both.");
+        }
+        const q = query({
+          after: intOption(opts.after, "after"),
+          before: intOption(opts.before, "before"),
+          limit: intOption(opts.limit, "limit"),
+          maxChars: intOption(opts["max-chars"], "max-chars"),
+        });
         print((await client.request("GET", `/states/${stateId()}/journal${q}`, { headers: accept })).text);
         return 0;
       }

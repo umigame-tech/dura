@@ -40,7 +40,21 @@ type Api = (method: string, path: string, init?: { body?: string; headers?: Reco
 
 const stateArg = { type: "string", description: "State id" };
 const nameArg = { type: "string", description: "Section name, e.g. goal, plan, design, tasks" };
-const afterArg = { type: "integer", minimum: 0, description: "Only journal entries after this seq (default 0)" };
+const afterArg = {
+  type: "integer",
+  minimum: 0,
+  description: "Only journal entries after this seq (default 0). Omit it when you pass before",
+};
+const beforeArg = {
+  type: "integer",
+  minimum: 0,
+  description: "Only the newest journal entries before this seq (a large value gives the latest). Not with after",
+};
+const maxCharsArg = {
+  type: "integer",
+  minimum: 1,
+  description: "Cut journal bodies longer than this many characters; the cut is marked with the length and get_journal_entry reads the whole entry",
+};
 const limitArg = { type: "integer", minimum: 1, maximum: 1000, description: "At most this many journal entries (default 200)" };
 const versionArg = { type: "integer", minimum: 0, description: "The section version you read" };
 
@@ -142,6 +156,8 @@ function hint(code: string, args: Json, currentVersion?: number): string | undef
       return "The bearer token configured for this MCP server is missing, mistyped or revoked. Tell the user.";
     case "forbidden":
       return "The token lacks the permission (read-only, or limited to other states). Tell the user.";
+    case "journal_entry_not_found":
+      return "Check the seq: read_journal with before=1000000000 and limit=1 shows the latest entry and its seq.";
     case "not_found":
       return args.name !== undefined
         ? "show_state lists the sections of the state; put_section without version creates a section."
@@ -161,20 +177,36 @@ const TOOLS: Tool[] = [
     name: "show_state",
     description:
       "Read a state as Markdown: status, every section with its version, and journal entries after `after` (oldest first). The output ends with the last journal seq; pass it as `after` next time.",
-    inputSchema: object({ state: stateArg, after: afterArg, limit: limitArg }, ["state"]),
+    inputSchema: object({ state: stateArg, after: afterArg, limit: limitArg, maxChars: maxCharsArg }, ["state"]),
     call: async (args, api) => {
-      const q = query({ after: int(args, "after"), limit: int(args, "limit") });
+      const q = query({ after: int(args, "after"), limit: int(args, "limit"), maxChars: int(args, "maxChars") });
       return ok(await api("GET", `/states/${state(args)}${q}`, { headers: MD }), args);
     },
   },
   {
     name: "read_journal",
     description:
-      "Read journal entries after `after`, oldest first. If the page holds as many entries as `limit`, call again with the last seq shown.",
-    inputSchema: object({ state: stateArg, after: afterArg, limit: limitArg }, ["state"]),
+      "Read journal entries after `after`, oldest first. If the page holds as many entries as `limit`, call again with the last seq shown. " +
+      "With `before` instead, read the newest `limit` entries before that seq (still oldest first); if older entries remain, the output says so and gives the next `before`.",
+    inputSchema: object({ state: stateArg, after: afterArg, before: beforeArg, limit: limitArg, maxChars: maxCharsArg }, ["state"]),
     call: async (args, api) => {
-      const q = query({ after: int(args, "after"), limit: int(args, "limit") });
+      const q = query({
+        after: int(args, "after"),
+        before: int(args, "before"),
+        limit: int(args, "limit"),
+        maxChars: int(args, "maxChars"),
+      });
       return ok(await api("GET", `/states/${state(args)}/journal${q}`, { headers: MD }), args);
+    },
+  },
+  {
+    name: "get_journal_entry",
+    description: "Read one whole journal entry by its seq, e.g. one that read_journal or show_state cut with maxChars.",
+    inputSchema: object({ state: stateArg, seq: { type: "integer", minimum: 1, description: "Journal seq" } }, ["state", "seq"]),
+    call: async (args, api) => {
+      const seq = int(args, "seq");
+      if (seq === undefined) throw new ToolError("seq is required.");
+      return ok(await api("GET", `/states/${state(args)}/journal/${seq}`, { headers: MD }), args);
     },
   },
   {

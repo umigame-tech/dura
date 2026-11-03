@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, gt, inArray, max, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, inArray, lt, max, sql } from "drizzle-orm";
 import { atomic, type DB, type Write } from "./db";
 import {
   journalEntries,
@@ -329,6 +329,94 @@ export async function listJournal(
     .limit(limit);
 }
 
+/**
+ * The newest `limit` entries with seq < before, returned oldest first. `olderBefore` is the
+ * smallest seq returned when older entries remain (pass it as the next `before`), or null.
+ */
+export async function listJournalBefore(
+  db: DB,
+  stateId: string,
+  opts: { before: number; limit?: number },
+): Promise<{ entries: JournalEntry[]; olderBefore: number | null }> {
+  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
+  const rows = await db
+    .select()
+    .from(journalEntries)
+    .where(and(eq(journalEntries.stateId, stateId), lt(journalEntries.seq, opts.before)))
+    .orderBy(desc(journalEntries.seq))
+    .limit(limit + 1);
+  const entries = rows.slice(0, limit).reverse();
+  return { entries, olderBefore: rows.length > limit ? entries[0]!.seq : null };
+}
+
+export async function getJournalEntry(db: DB, stateId: string, seq: number): Promise<JournalEntry> {
+  await getState(db, stateId);
+  const [row] = await db
+    .select()
+    .from(journalEntries)
+    .where(and(eq(journalEntries.stateId, stateId), eq(journalEntries.seq, seq)));
+  if (!row) {
+    // A code of its own, so clients can tell "no such entry" from "no such state" (not_found).
+    throw new ApiError(404, "journal_entry_not_found", `State "${stateId}" has no journal entry #${seq}.`);
+  }
+  return row;
+}
+
+/** Character count used by maxChars: Unicode code points, so an excerpt never splits a surrogate pair. */
+export function excerpt(body: string, maxChars: number | undefined): { body: string; truncated: boolean; totalChars: number } {
+  // Callers only read totalChars when maxChars is set, so skip counting otherwise.
+  if (maxChars === undefined) return { body, truncated: false, totalChars: body.length };
+  const chars = Array.from(body);
+  if (chars.length <= maxChars) return { body, truncated: false, totalChars: chars.length };
+  return { body: chars.slice(0, maxChars).join(""), truncated: true, totalChars: chars.length };
+}
+
+/**
+ * The fence of a code block left open at the end of `text`, following CommonMark: a backtick opening
+ * fence has no backtick in its info string, and a closing fence uses the same character, is at least
+ * as long and has nothing after it. Fences nested in lists or quotes (indented further) are not
+ * tracked; missing one only leaves the excerpt as unbalanced as it was cut.
+ */
+function openFence(text: string): string | undefined {
+  let open: string | undefined;
+  // CRLF bodies (pasted from Windows) must match too: "." and "[ \t]" do not match "\r".
+  for (const line of text.split(/\r?\n/)) {
+    if (open === undefined) {
+      const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (m && !(m[1]![0] === "`" && m[2]!.includes("`"))) open = m[1];
+    } else {
+      const fence = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line)?.[1];
+      if (fence && fence[0] === open[0] && fence.length >= open.length) open = undefined;
+    }
+  }
+  return open;
+}
+
+/** One journal entry as Markdown. With maxChars, a longer body is cut and the cut is stated with where to read it all. */
+export function journalEntryMarkdown(stateId: string, e: JournalEntry, maxChars?: number): string {
+  // Counted on the stored body, like the JSON response, so both report the same totalChars.
+  const x = excerpt(e.body, maxChars);
+  let text = x.body.trim();
+  // A cut inside a fenced code block would leave it open and swallow the notice and the next entries.
+  if (x.truncated) {
+    // Judge the cut line as it is in the whole body: a cut inside "``` a`b" must not make it look like a fence.
+    // A cut right after a newline ends a line, so the next line is not part of the excerpt.
+    const lineEnd = x.body.endsWith("\n") ? x.body.length : e.body.indexOf("\n", x.body.length);
+    // Slicing at "\n" keeps the "\r" of a CRLF line, which the fence patterns would not match.
+    const fence = openFence((lineEnd === -1 ? e.body : e.body.slice(0, lineEnd)).replace(/\r$/, ""));
+    if (fence) text += `\n${fence}`;
+  }
+  const lines = [`### #${e.seq} ${e.kind} by ${e.actor} at ${e.createdAt}`, "", text];
+  if (x.truncated) {
+    lines.push(
+      "",
+      `_[Truncated: showing ${maxChars} of ${x.totalChars} characters. Read the whole entry with ` +
+        `GET /api/states/${encodeURIComponent(stateId)}/journal/${e.seq} (CLI: \`dura journal ${e.seq}\`, MCP: get_journal_entry).]_`,
+    );
+  }
+  return lines.join("\n");
+}
+
 /** A page of entries, newest first, for the web UI. The REST API keeps the oldest-first `listJournal`. */
 // Offset paging shifts when entries are appended while someone is paging, so an entry can show on two pages.
 // The UI pages by number (?jpage=), which is fine for reading; a seq cursor (seq < before) would avoid the shift.
@@ -498,6 +586,7 @@ export function renderStateMarkdown(
   journal: JournalEntry[],
   after: number,
   summary?: JournalSummary,
+  maxChars?: number,
 ): string {
   const lines: string[] = [];
   lines.push(`# ${state.title}`, "");
@@ -530,10 +619,7 @@ export function renderStateMarkdown(
   }
   lines.push(after > 0 ? `## Journal (after #${after})` : "## Journal", "");
   if (journal.length === 0) lines.push("_No entries._", "");
-  for (const e of journal) {
-    lines.push(`### #${e.seq} ${e.kind} by ${e.actor} at ${e.createdAt}`, "");
-    lines.push(e.body.trim(), "");
-  }
+  for (const e of journal) lines.push(journalEntryMarkdown(state.id, e, maxChars), "");
   const last = journal.at(-1)?.seq ?? after;
   lines.push("---", "", `Last journal seq: ${last}. Next time, read only newer entries with after=${last}.`, "");
   return lines.join("\n");

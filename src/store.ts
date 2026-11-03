@@ -402,7 +402,8 @@ export function journalEntryMarkdown(stateId: string, e: JournalEntry, maxChars?
     // Judge the cut line as it is in the whole body: a cut inside "``` a`b" must not make it look like a fence.
     // A cut right after a newline ends a line, so the next line is not part of the excerpt.
     const lineEnd = x.body.endsWith("\n") ? x.body.length : e.body.indexOf("\n", x.body.length);
-    const fence = openFence(lineEnd === -1 ? e.body : e.body.slice(0, lineEnd));
+    // Slicing at "\n" keeps the "\r" of a CRLF line, which the fence patterns would not match.
+    const fence = openFence((lineEnd === -1 ? e.body : e.body.slice(0, lineEnd)).replace(/\r$/, ""));
     if (fence) text += `\n${fence}`;
   }
   const lines = [`### #${e.seq} ${e.kind} by ${e.actor} at ${e.createdAt}`, "", text];

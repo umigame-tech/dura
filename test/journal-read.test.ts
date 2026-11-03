@@ -142,6 +142,10 @@ describe("journal: maxChars and one whole entry", () => {
     const cases: [string, number, string][] = [
       // CRLF: the fence line ends with \r.
       ["```js\r\ncode line\r\nmore code\r\n```\r\nafter", 20, "code line\r\nmo\n```\n\n_[Truncated:"],
+      // CRLF with the cut on the opening fence line: the block is open, so it is closed.
+      ["```js\r\ncode\r\n```\r\nafter text", 5, "```js\n```\n\n_[Truncated:"],
+      // CRLF with the cut right after the closing fence: the block is closed, so nothing is added.
+      ["```js\r\ncode\r\n```\r\nafter text", 16, "```js\r\ncode\r\n```\n\n_[Truncated:"],
       // Tildes, and a shorter fence does not close a longer one.
       ["~~~~\n~~~\nstill inside\n~~~~\nafter", 15, "~~~\nstill\n~~~~\n\n_[Truncated:"],
       // A closing fence may have trailing spaces.

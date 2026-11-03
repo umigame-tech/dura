@@ -33,6 +33,7 @@ POST    /api/states/:id/sections/:name/replace        old/new による部分置
 GET     /api/states/:id/sections/:name/revisions      全 revision
 GET     /api/states/:id/summary                       再開用の要約（ETag に version、X-Covered-Through-Seq に反映済みの seq）
 PUT     /api/states/:id/summary                       要約の書き込み {content, coveredThroughSeq}（If-Match: version）
+GET     /api/states/:id/summary/revisions             要約の全 revision
 GET     /api/states/:id/journal                       ジャーナル（?after=<seq>）
 POST    /api/states/:id/journal                       追記 {kind, body}、または Markdown 本文 + ?kind=
 GET     /api/guide                                    エージェント向けの使い方（Markdown）

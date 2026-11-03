@@ -57,7 +57,7 @@ S="$DURA_STATE"; AUTH="Authorization: Bearer $DURA_TOKEN"
    curl -sS "$DURA_URL/api/guide"
    ```
 
-2. 再開用の要約があるか確かめる。あれば、`X-Covered-Through-Seq` が要約に反映済みの journal の seq なので、それを `C` に入れる。`404` なら要約はまだないので `C=0` にする。
+2. 再開用の要約があるか確かめる。あれば、`X-Covered-Through-Seq` が要約に反映済みの journal の seq なので、それを `C` に入れる。`404`（`summary_not_found`）なら要約はまだないので `C=0` にする。
 
    ```bash
    curl -sS -i -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S/summary"
@@ -186,7 +186,7 @@ curl -sS -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
 | 読める State の一覧 | `dura list` |
 
 ```bash
-dura summary get   # 要約がなければ not_found。反映済みの seq を C とする
+dura summary get   # 要約がなければ summary_not_found。反映済みの seq を C とする
 dura show --after $C --limit 1000
 dura log --kind report <<'EOF'
 CI を追加した（#3）。typecheck と test が PR で走る。

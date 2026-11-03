@@ -16,7 +16,9 @@ describe("journal summary API", () => {
     const { call, t, db } = await withJournal();
     const none = await call(t, "GET", "/api/states/s/summary");
     expect(none.status).toBe(404);
-    expect((await none.json()).error.message).toContain("after=0");
+    expect((await none.json()).error).toMatchObject({ code: "summary_not_found", message: expect.stringContaining("after=0") });
+    expect((await (await call(t, "GET", "/api/states/nope/summary")).json()).error.code).toBe("not_found");
+    expect((await call(t, "GET", "/api/states/s/summary/revisions")).status).toBe(404);
 
     const created = await call(t, "PUT", "/api/states/s/summary", { content: "Done 1-2.", coveredThroughSeq: 2 });
     expect(created.status).toBe(200);
@@ -44,6 +46,15 @@ describe("journal summary API", () => {
       [1, 2, "Done 1-2."],
       [2, 3, "Done 1-3."],
     ]);
+    const listed = (await (await call(t, "GET", "/api/states/s/summary/revisions")).json()).revisions;
+    expect(listed.map((r: { version: number; coveredThroughSeq: number }) => [r.version, r.coveredThroughSeq])).toEqual([
+      [2, 3],
+      [1, 2],
+    ]);
+
+    const badIfMatch = await call(t, "PUT", "/api/states/s/summary", { content: "x", coveredThroughSeq: 3 }, { "If-Match": "abc" });
+    expect(badIfMatch.status).toBe(400);
+    expect((await badIfMatch.json()).error.message).toContain("If-Match must be a version number");
   });
 
   it("never lets coveredThroughSeq pass the last journal entry", async () => {
@@ -91,9 +102,11 @@ describe("journal summary API", () => {
     await call(t, "PUT", "/api/states/s/summary", { content: "x", coveredThroughSeq: 1 });
     const reader = await tokenFor("reader", "read");
     expect((await call(reader, "GET", "/api/states/s/summary")).status).toBe(200);
+    expect((await call(reader, "GET", "/api/states/s/summary/revisions")).status).toBe(200);
     expect((await call(reader, "PUT", "/api/states/s/summary", { content: "y", coveredThroughSeq: 2 }, { "If-Match": "1" })).status).toBe(403);
     const other = await tokenFor("other", "write", ["other"]);
     expect((await call(other, "GET", "/api/states/s/summary")).status).toBe(403);
+    expect((await call(other, "GET", "/api/states/s/summary/revisions")).status).toBe(403);
   });
 
   it("leads the state view with the summary and points to the unread entries", async () => {
@@ -134,6 +147,9 @@ describe("journal summary over MCP", () => {
     const missing = await tool("get_summary", { state: "s" });
     expect(missing.isError).toBe(true);
     expect(missing.text).toContain("put_summary without version");
+    const noState = await tool("get_summary", { state: "nope" });
+    expect(noState.text).toContain("Check the state id");
+    expect(noState.text).not.toContain("put_summary");
 
     expect((await tool("put_summary", { state: "s", content: "Short.", coveredThroughSeq: 2 })).text).toBe(
       "Wrote the journal summary (version 1, covers the journal through #2).",
@@ -178,6 +194,10 @@ describe("journal summary in the CLI", () => {
     const none = await exec(["summary", "get"]);
     expect(none.code).toBe(1);
     expect(none.stderr).toContain("dura journal --after 0");
+    const noState = await exec(["summary", "get", "--state", "nope"]);
+    expect(noState.stderr).toContain("Check the state id (nope)");
+    expect(noState.stderr).not.toContain("summary put");
+    expect((await exec(["summary", "put", "--state", "nope", "--covered", "0"], "x")).stderr).toContain("Check the state id (nope)");
 
     expect((await exec(["summary", "put"], "x")).stderr).toContain("needs --covered");
     const put = await exec(["summary", "put", "--covered", "2"], "Entries 1-2.");

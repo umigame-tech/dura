@@ -17,6 +17,7 @@ export type Section = typeof sections.$inferSelect;
 export type SectionRevision = typeof sectionRevisions.$inferSelect;
 export type JournalEntry = typeof journalEntries.$inferSelect;
 export type JournalSummary = typeof journalSummaries.$inferSelect;
+export type JournalSummaryRevision = typeof journalSummaryRevisions.$inferSelect;
 
 const STATUS_ORDER = sql`case ${states.status} when 'waiting' then 0 when 'active' then 1 when 'completed' then 2 else 3 end`;
 
@@ -168,16 +169,41 @@ export async function getSection(db: DB, stateId: string, name: string): Promise
   return row;
 }
 
-function conflict(stateId: string, name: string, sent: number, current: Section | undefined): ApiError {
+type Versioned = { version: number; updatedBy: string; updatedAt: string };
+
+/**
+ * 409 for a stale write to a versioned document (a section or the journal summary).
+ * `what` names it mid-sentence; `reread` says how to re-read it and re-apply the change.
+ */
+function versionConflict(what: string, reread: string, sent: number, current: Versioned | undefined): ApiError {
   const currentVersion = current?.version ?? 0;
   const who = current ? ` (last written by ${current.updatedBy} at ${current.updatedAt})` : "";
   return new ApiError(
     409,
     "version_conflict",
-    `You sent version ${sent}, but section "${name}" is now at version ${currentVersion}${who}. ` +
-      `Re-read it with GET /api/states/${stateId}/sections/${name}, ` +
-      `re-apply your change to the latest content, and retry with If-Match: ${currentVersion}.`,
+    `You sent version ${sent}, but ${what} is now at version ${currentVersion}${who}. ` +
+      `${reread}, and retry with If-Match: ${currentVersion}.`,
     { currentVersion, sentVersion: sent },
+  );
+}
+
+/** 428 for a write without If-Match to a versioned document that already exists. `What` starts the sentence. */
+function versionRequired(What: string, current: Versioned): ApiError {
+  return new ApiError(
+    428,
+    "precondition_required",
+    `${What} already exists (version ${current.version}). Send If-Match: ${current.version} ` +
+      `with the version you based your edit on, so concurrent edits are not lost.`,
+    { currentVersion: current.version },
+  );
+}
+
+function conflict(stateId: string, name: string, sent: number, current: Section | undefined): ApiError {
+  return versionConflict(
+    `section "${name}"`,
+    `Re-read it with GET /api/states/${stateId}/sections/${name}, re-apply your change to the latest content`,
+    sent,
+    current,
   );
 }
 
@@ -219,15 +245,7 @@ export async function putSection(
   await getState(db, stateId);
   const current = await findSection(db, stateId, name);
   if (expectedVersion === null) {
-    if (current) {
-      throw new ApiError(
-        428,
-        "precondition_required",
-        `Section "${name}" already exists (version ${current.version}). Send If-Match: ${current.version} ` +
-          `with the version you based your edit on, so concurrent edits are not lost.`,
-        { currentVersion: current.version },
-      );
-    }
+    if (current) throw versionRequired(`Section "${name}"`, current);
     expectedVersion = 0;
   }
   if ((current?.version ?? 0) !== expectedVersion) throw conflict(stateId, name, expectedVersion, current);
@@ -381,9 +399,10 @@ export async function getSummary(db: DB, stateId: string): Promise<JournalSummar
   await getState(db, stateId);
   const row = await findSummary(db, stateId);
   if (!row) {
+    // A code of its own, so clients can tell "no summary yet" from "no such state" (not_found).
     throw new ApiError(
       404,
-      "not_found",
+      "summary_not_found",
       `State "${stateId}" has no journal summary yet. Read the journal from the start (after=0), ` +
         `then write one with PUT /api/states/${stateId}/summary.`,
     );
@@ -392,16 +411,22 @@ export async function getSummary(db: DB, stateId: string): Promise<JournalSummar
 }
 
 function summaryConflict(stateId: string, sent: number, current: JournalSummary | undefined): ApiError {
-  const currentVersion = current?.version ?? 0;
-  const who = current ? ` (last written by ${current.updatedBy} at ${current.updatedAt})` : "";
-  return new ApiError(
-    409,
-    "version_conflict",
-    `You sent version ${sent}, but the journal summary is now at version ${currentVersion}${who}. ` +
-      `Re-read it with GET /api/states/${stateId}/summary, read the journal after its coveredThroughSeq, ` +
-      `merge your summary into it, and retry with If-Match: ${currentVersion}.`,
-    { currentVersion, sentVersion: sent },
+  return versionConflict(
+    "the journal summary",
+    `Re-read it with GET /api/states/${stateId}/summary, read the journal after its coveredThroughSeq, ` +
+      `merge your summary into it`,
+    sent,
+    current,
   );
+}
+
+export async function listSummaryRevisions(db: DB, stateId: string): Promise<JournalSummaryRevision[]> {
+  await getSummary(db, stateId);
+  return db
+    .select()
+    .from(journalSummaryRevisions)
+    .where(eq(journalSummaryRevisions.stateId, stateId))
+    .orderBy(desc(journalSummaryRevisions.version));
 }
 
 /**
@@ -425,15 +450,7 @@ export async function putSummary(
   await getState(db, stateId);
   const current = await findSummary(db, stateId);
   if (expectedVersion === null) {
-    if (current) {
-      throw new ApiError(
-        428,
-        "precondition_required",
-        `The journal summary already exists (version ${current.version}). Send If-Match: ${current.version} ` +
-          `with the version you based your summary on, so concurrent edits are not lost.`,
-        { currentVersion: current.version },
-      );
-    }
+    if (current) throw versionRequired("The journal summary", current);
     expectedVersion = 0;
   }
   if ((current?.version ?? 0) !== expectedVersion) throw summaryConflict(stateId, expectedVersion, current);

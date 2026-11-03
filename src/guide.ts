@@ -71,7 +71,7 @@ First check for a journal summary:
 
 If it exists, its covered seq is printed on stderr (\`covers journal through #41\`). Read it,
 then start below with \`--after 41\` instead of 0: the summary stands in for the older entries.
-If it does not exist (\`not_found\`), read the whole journal as below.
+If it does not exist (\`summary_not_found\`), read the whole journal as below.
 
 Start with the sections and the first page of unread journal entries:
 
@@ -202,7 +202,7 @@ continue with the journal endpoint using that seq as after until a page has fewe
 entries. Save the last seq for your next session; use the same procedure as Reading above.
 
 The journal summary (raw Markdown; its version is in \`ETag\` and the covered seq in
-\`X-Covered-Through-Seq\`; \`404\` if there is none). The state document above also
+\`X-Covered-Through-Seq\`; \`404 summary_not_found\` if there is none). The state document above also
 starts with it. Read the journal after the covered seq:
 
     curl -sS -i -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
@@ -269,6 +269,7 @@ After confirming the title and goal with the human, create a new state
     GET    /api/states/:id/sections/:name/revisions      every version of a section
     GET    /api/states/:id/summary                       journal summary and its coveredThroughSeq
     PUT    /api/states/:id/summary                       {content, coveredThroughSeq} (If-Match: version)
+    GET    /api/states/:id/summary/revisions             every version of the summary
     GET    /api/states/:id/journal                       entries (?after=, ?limit=)
     POST   /api/states/:id/journal                       append {kind, body} or Markdown body with ?kind=
     GET    /api/guide                                    this document

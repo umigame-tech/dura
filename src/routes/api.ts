@@ -14,6 +14,7 @@ import {
   getSummary,
   listJournal,
   listRevisions,
+  listSummaryRevisions,
   listSections,
   listStates,
   putSection,
@@ -45,7 +46,7 @@ function ifMatch(c: Context<AppEnv>): number | null {
   const raw = c.req.header("If-Match");
   if (raw === undefined) return null;
   const m = /^\s*(?:W\/)?"?(\d+)"?\s*$/.exec(raw);
-  if (!m) throw badRequest(`If-Match must be a section version number such as 7 (got ${JSON.stringify(raw)}).`);
+  if (!m) throw badRequest(`If-Match must be a version number such as 7 (got ${JSON.stringify(raw)}).`);
   return Number(m[1]);
 }
 
@@ -246,6 +247,22 @@ api.get("/states/:id/summary", async (c) => {
     return markdown(c, summary.content);
   }
   return c.json({ summary: summaryJson(summary) });
+});
+
+api.get("/states/:id/summary/revisions", async (c) => {
+  const actor = requireActor(c);
+  const id = c.req.param("id");
+  assertRead(actor, id);
+  const revisions = await listSummaryRevisions(c.get("deps").db, id);
+  return c.json({
+    revisions: revisions.map((r) => ({
+      version: r.version,
+      content: r.content,
+      coveredThroughSeq: r.coveredThroughSeq,
+      updatedBy: r.updatedBy,
+      createdAt: r.createdAt,
+    })),
+  });
 });
 
 api.put("/states/:id/summary", async (c) => {

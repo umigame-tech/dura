@@ -159,10 +159,10 @@ function hint(err: ResponseError, ctx: { command: string; name?: string; stateId
         return `The summary already exists. Read it with \`dura summary get\` and pass --version ${err.body.currentVersion ?? "<its version>"}.`;
       case "seq_out_of_range":
         return "Set --covered to the last journal seq you actually read and reflected in the summary.";
+      case "summary_not_found":
+        return "There is no summary yet: read the journal from the start (`dura journal --after 0`), then write one with `dura summary put` without --version.";
       case "not_found":
-        if (ctx.name === "get") {
-          return "There is no summary yet: read the journal from the start (`dura journal --after 0`), then write one with `dura summary put` without --version.";
-        }
+        return `Check the state id (${ctx.stateId}); \`dura list\` shows the states you can read.`;
     }
   }
   const get = ctx.name ? `dura section get ${ctx.name}` : undefined;
@@ -409,7 +409,6 @@ async function summary(
 ): Promise<number> {
   const [sub] = args;
   if (!sub || !["get", "put"].includes(sub)) throw new CliError("Use `dura summary get|put`.");
-  h.ctx.name = sub;
   const path = `/states/${h.stateId()}/summary`;
 
   if (sub === "get") {

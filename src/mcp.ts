@@ -16,7 +16,7 @@ const STATUSES = ["active", "waiting", "completed", "abandoned"];
 const INSTRUCTIONS = `dura keeps the state of a long-running task outside of any single agent session.
 A state has overwritable, versioned Markdown sections (goal, plan, design, tasks...) and an append-only journal.
 
-Before choosing work, call get_summary. If the state has a journal summary, it covers the journal through a seq: call show_state with after=<that seq> to read the goal, plan, tasks and only the newer entries. Without a summary (not_found), call show_state with after=0 and read the whole journal.
+Before choosing work, call get_summary. If the state has a journal summary, it covers the journal through a seq: call show_state with after=<that seq> to read the goal, plan, tasks and only the newer entries. Without a summary (summary_not_found), call show_state with after=0 and read the whole journal.
 If a page holds as many journal entries as the limit, continue with read_journal from the last seq shown.
 If the status is waiting, the status note is a question for the human: get their decision before resuming.
 
@@ -118,10 +118,10 @@ function summaryHint(code: string, args: Json, currentVersion?: number): string 
       return `The summary already exists. Read it with ${get} and pass version ${currentVersion ?? "<its version>"}.`;
     case "seq_out_of_range":
       return "Set coveredThroughSeq to the last journal seq you actually read and reflected in the summary.";
+    case "summary_not_found":
+      return "There is no summary yet: read the journal from after=0, then write one with put_summary without version.";
     case "not_found":
-      return args.content === undefined
-        ? "There is no summary yet: read the journal from after=0, then write one with put_summary without version."
-        : "Check the state id; list_states shows the states you can read.";
+      return "Check the state id; list_states shows the states you can read.";
   }
   return hint(code, args, currentVersion);
 }

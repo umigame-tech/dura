@@ -6,7 +6,16 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getPlatformProxy } from "wrangler";
 import type { DB } from "../src/db";
 import * as schema from "../src/db/schema";
-import { appendJournal, createState, findSection, findState, listJournal, putSection } from "../src/store";
+import {
+  appendJournal,
+  createState,
+  findSection,
+  findState,
+  findSummary,
+  listJournal,
+  putSection,
+  putSummary,
+} from "../src/store";
 
 // The same atomic writes as test/atomic.test.ts, on the real drizzle D1 driver (batch) against wrangler's local D1.
 describe("atomic writes on D1", () => {
@@ -88,5 +97,30 @@ describe("atomic writes on D1", () => {
     await createState(db, { id: "j", title: "J" }, "me");
     await Promise.all(Array.from({ length: 5 }, (_, i) => appendJournal(db, "j", "me", "note", `n${i}`)));
     expect((await listJournal(db, "j")).map((e) => e.seq)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("writes the journal summary atomically and lets one concurrent writer win", async () => {
+    await createState(db, { id: "m", title: "M" }, "me");
+    await appendJournal(db, "m", "me", "note", "one");
+    await d1.exec(
+      "CREATE TRIGGER fail_touch_m BEFORE UPDATE ON states WHEN NEW.id = 'm' BEGIN SELECT RAISE(ABORT, 'touch'); END",
+    );
+    try {
+      await expect(putSummary(db, "m", { content: "s", coveredThroughSeq: 1 }, null, "me")).rejects.toThrow(/touch/);
+      expect(await count("journal_summary_revisions", "m")).toBe(0);
+      expect(await findSummary(db, "m")).toBeUndefined();
+    } finally {
+      await d1.exec("DROP TRIGGER fail_touch_m");
+    }
+    const results = await Promise.allSettled([
+      putSummary(db, "m", { content: "a", coveredThroughSeq: 1 }, 0, "me"),
+      putSummary(db, "m", { content: "b", coveredThroughSeq: 1 }, 0, "me"),
+    ]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect((results.find((r) => r.status === "rejected") as PromiseRejectedResult).reason).toMatchObject({
+      code: "version_conflict",
+    });
+    expect(await count("journal_summary_revisions", "m")).toBe(1);
+    expect((await findSummary(db, "m"))?.version).toBe(1);
   });
 });

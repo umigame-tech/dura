@@ -1,6 +1,14 @@
 import { and, asc, count, desc, eq, gt, inArray, max, sql } from "drizzle-orm";
 import { atomic, type DB, type Write } from "./db";
-import { journalEntries, sectionRevisions, sections, states, type StateStatus } from "./db/schema";
+import {
+  journalEntries,
+  journalSummaries,
+  journalSummaryRevisions,
+  sectionRevisions,
+  sections,
+  states,
+  type StateStatus,
+} from "./db/schema";
 import { ApiError, badRequest, isUniqueViolation, notFound } from "./lib/errors";
 import { ID_PATTERN, nowIso, SECTION_NAME_PATTERN, slugify } from "./lib/util";
 
@@ -8,6 +16,7 @@ export type State = typeof states.$inferSelect;
 export type Section = typeof sections.$inferSelect;
 export type SectionRevision = typeof sectionRevisions.$inferSelect;
 export type JournalEntry = typeof journalEntries.$inferSelect;
+export type JournalSummary = typeof journalSummaries.$inferSelect;
 
 const STATUS_ORDER = sql`case ${states.status} when 'waiting' then 0 when 'active' then 1 when 'completed' then 2 else 3 end`;
 
@@ -361,9 +370,118 @@ export async function appendJournal(
 }
 
 // ---------------------------------------------------------------------------
+// Journal summary: what a new session reads instead of the whole journal.
+
+export async function findSummary(db: DB, stateId: string): Promise<JournalSummary | undefined> {
+  const [row] = await db.select().from(journalSummaries).where(eq(journalSummaries.stateId, stateId));
+  return row;
+}
+
+export async function getSummary(db: DB, stateId: string): Promise<JournalSummary> {
+  await getState(db, stateId);
+  const row = await findSummary(db, stateId);
+  if (!row) {
+    throw new ApiError(
+      404,
+      "not_found",
+      `State "${stateId}" has no journal summary yet. Read the journal from the start (after=0), ` +
+        `then write one with PUT /api/states/${stateId}/summary.`,
+    );
+  }
+  return row;
+}
+
+function summaryConflict(stateId: string, sent: number, current: JournalSummary | undefined): ApiError {
+  const currentVersion = current?.version ?? 0;
+  const who = current ? ` (last written by ${current.updatedBy} at ${current.updatedAt})` : "";
+  return new ApiError(
+    409,
+    "version_conflict",
+    `You sent version ${sent}, but the journal summary is now at version ${currentVersion}${who}. ` +
+      `Re-read it with GET /api/states/${stateId}/summary, read the journal after its coveredThroughSeq, ` +
+      `merge your summary into it, and retry with If-Match: ${currentVersion}.`,
+    { currentVersion, sentVersion: sent },
+  );
+}
+
+/**
+ * Writes the journal summary and the journal seq it covers, as one version.
+ * expectedVersion works as in putSection: 0 = must not exist yet, null = no If-Match (only allowed when creating).
+ * coveredThroughSeq is never moved by the server: the writer states which entries the content reflects,
+ * so entries appended while the summary was being written are not skipped by the next session.
+ */
+export async function putSummary(
+  db: DB,
+  stateId: string,
+  input: { content: string; coveredThroughSeq: number },
+  expectedVersion: number | null,
+  actor: string,
+): Promise<JournalSummary> {
+  const { content, coveredThroughSeq } = input;
+  if (!Number.isSafeInteger(coveredThroughSeq) || coveredThroughSeq < 0) {
+    throw badRequest("coveredThroughSeq must be a non-negative integer: the last journal seq the summary reflects.");
+  }
+  if (!content.trim()) throw badRequest("content must not be empty.");
+  await getState(db, stateId);
+  const current = await findSummary(db, stateId);
+  if (expectedVersion === null) {
+    if (current) {
+      throw new ApiError(
+        428,
+        "precondition_required",
+        `The journal summary already exists (version ${current.version}). Send If-Match: ${current.version} ` +
+          `with the version you based your summary on, so concurrent edits are not lost.`,
+        { currentVersion: current.version },
+      );
+    }
+    expectedVersion = 0;
+  }
+  if ((current?.version ?? 0) !== expectedVersion) throw summaryConflict(stateId, expectedVersion, current);
+  const lastSeq = await lastJournalSeq(db, stateId);
+  if (coveredThroughSeq > lastSeq) {
+    throw new ApiError(
+      422,
+      "seq_out_of_range",
+      `coveredThroughSeq ${coveredThroughSeq} is beyond the last journal seq ${lastSeq}. ` +
+        `Set it to the last seq you actually read and reflected in the summary.`,
+      { lastSeq },
+    );
+  }
+
+  const version = expectedVersion + 1;
+  const ts = nowIso();
+  try {
+    // As in putSection, claiming the revision row is the lock, and everything is written together.
+    await atomic(db, [
+      db
+        .insert(journalSummaryRevisions)
+        .values({ stateId, version, content, coveredThroughSeq, updatedBy: actor, createdAt: ts }),
+      db
+        .insert(journalSummaries)
+        .values({ stateId, content, coveredThroughSeq, version, updatedBy: actor, updatedAt: ts })
+        .onConflictDoUpdate({
+          target: journalSummaries.stateId,
+          set: { content, coveredThroughSeq, version, updatedBy: actor, updatedAt: ts },
+        }),
+      touchState(db, stateId),
+    ]);
+  } catch (err) {
+    if (isUniqueViolation(err)) throw summaryConflict(stateId, expectedVersion, await findSummary(db, stateId));
+    throw err;
+  }
+  return (await findSummary(db, stateId))!;
+}
+
+// ---------------------------------------------------------------------------
 // Markdown export: everything an agent needs to resume work, in one document.
 
-export function renderStateMarkdown(state: State, secs: Section[], journal: JournalEntry[], after: number): string {
+export function renderStateMarkdown(
+  state: State,
+  secs: Section[],
+  journal: JournalEntry[],
+  after: number,
+  summary?: JournalSummary,
+): string {
   const lines: string[] = [];
   lines.push(`# ${state.title}`, "");
   lines.push(`- id: ${state.id}`);
@@ -371,6 +489,20 @@ export function renderStateMarkdown(state: State, secs: Section[], journal: Jour
   lines.push(`- updated: ${state.updatedAt}`);
   if (state.statusNote) lines.push("", "## Status note", "", state.statusNote.trim());
   lines.push("");
+  if (summary) {
+    lines.push("## Journal summary", "");
+    lines.push(
+      `<!-- version: ${summary.version}, covers journal through #${summary.coveredThroughSeq}, ` +
+        `updated by ${summary.updatedBy} at ${summary.updatedAt} -->`,
+      "",
+    );
+    lines.push(summary.content.trim() || "_(empty)_", "");
+    lines.push(
+      `_This summary reflects the journal through #${summary.coveredThroughSeq}. ` +
+        `To resume, read only the entries after it (after=${summary.coveredThroughSeq})._`,
+      "",
+    );
+  }
   if (secs.length === 0) {
     lines.push("_No sections yet._", "");
   }

@@ -67,6 +67,36 @@ export const journalEntries = sqliteTable(
   (t) => [primaryKey({ columns: [t.stateId, t.seq] })],
 );
 
+// The resume summary of a state's journal: one per state. coveredThroughSeq is the last journal seq
+// whose content the summary reflects, so a new session reads the summary and then only entries after it.
+// The content and coveredThroughSeq are always written together as one version.
+export const journalSummaries = sqliteTable("journal_summaries", {
+  stateId: text("state_id")
+    .primaryKey()
+    .references(() => states.id, { onDelete: "cascade" }),
+  content: text("content").notNull(),
+  coveredThroughSeq: integer("covered_through_seq").notNull(),
+  version: integer("version").notNull(),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: text("updated_at").notNull().default(now),
+});
+
+// Full snapshot per summary version. As with sectionRevisions, the primary key is the optimistic lock.
+export const journalSummaryRevisions = sqliteTable(
+  "journal_summary_revisions",
+  {
+    stateId: text("state_id")
+      .notNull()
+      .references(() => states.id, { onDelete: "cascade" }),
+    version: integer("version").notNull(),
+    content: text("content").notNull(),
+    coveredThroughSeq: integer("covered_through_seq").notNull(),
+    updatedBy: text("updated_by").notNull(),
+    createdAt: text("created_at").notNull().default(now),
+  },
+  (t) => [primaryKey({ columns: [t.stateId, t.version] })],
+);
+
 // Named bearer tokens for agents. Only the SHA-256 hash of the secret is stored.
 export const tokens = sqliteTable(
   "tokens",

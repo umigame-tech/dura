@@ -25,6 +25,8 @@ dura section put plan --version 3 < plan.md Write a whole section (omit --versio
 dura section replace tasks --version 7 --old "- [ ] CI" --new "- [x] CI"
 dura log --kind report "Added CI"           Append to the journal (argument, stdin, or --file)
 dura journal --after 41                     Journal entries after a seq
+dura summary get                            Journal summary to stdout, its version and covered seq to stderr
+dura summary put --covered 41 --version 3 < summary.md  Write the summary (omit --version to create it)
 dura status waiting --note "Which name?"
 dura guide                                  Print /api/guide
 ```

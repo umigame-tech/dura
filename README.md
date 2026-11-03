@@ -12,6 +12,8 @@ REST API を正本とし、Web UI と CLI はその上に載る公式クライ�
 | **セクション** | `goal` / `plan` / `design` / `tasks` など、名前を自由に決められる Markdown 文書です | 上書きします。version による楽観ロックを使い、更新のたびに全文スナップショットを revision として残します |
 | **ジャーナル** | `report` / `decision` / `note` などの記録です | 追記だけを行います。seq はサーバーが採番するので、並列に書いても衝突しません |
 
+ジャーナルが長くなったら、オーケストレーターが**再開用の要約**（State ごとに 1 つ）を書きます。要約は本文と「ジャーナルの何番まで反映したか」（`coveredThroughSeq`）を 1 つの版として保存し、セクションと同じく version で楽観ロックします。新しいセッションは要約と、それより後のジャーナルだけを読めば作業を再開できます。
+
 サブエージェントはジャーナルに `report` を追記するだけにして、セクションの更新はオーケストレーターが担います。
 こうすると追記同士は競合しないため、ロックや claim の仕組みが要りません。
 
@@ -23,12 +25,14 @@ State の status は `active` / `waiting` / `completed` / `abandoned` の 4 つ�
 ```
 GET     /api/states                                   一覧（?status=）
 POST    /api/states                                   作成 {id?, title, status?, statusNote?, sections?}
-GET     /api/states/:id                               State・全セクション・ジャーナル（?after=, ?limit=）
+GET     /api/states/:id                               State・要約・全セクション・ジャーナル（?after=, ?limit=）
 PATCH   /api/states/:id                               {title?, status?, statusNote?}
 GET     /api/states/:id/sections/:name                セクション（ETag に version が入ります）
 PUT     /api/states/:id/sections/:name                全文の書き込み（If-Match: version）
 POST    /api/states/:id/sections/:name/replace        old/new による部分置換（If-Match 必須）
 GET     /api/states/:id/sections/:name/revisions      全 revision
+GET     /api/states/:id/summary                       再開用の要約（ETag に version、X-Covered-Through-Seq に反映済みの seq）
+PUT     /api/states/:id/summary                       要約の書き込み {content, coveredThroughSeq}（If-Match: version）
 GET     /api/states/:id/journal                       ジャーナル（?after=<seq>）
 POST    /api/states/:id/journal                       追記 {kind, body}、または Markdown 本文 + ?kind=
 GET     /api/guide                                    エージェント向けの使い方（Markdown）
@@ -37,13 +41,14 @@ POST    /mcp                                          MCP（Streamable HTTP、�
 
 - `Accept: text/markdown` を付けると、`GET /api/states/:id` は全セクションと指定位置以降のジャーナルを 1 つの Markdown にまとめて返します。エージェントは 1 回の呼び出しで作業に必要な文脈を読み込めます。
 - セクションの書き込みは `If-Match` に「読んだときの version」を付けて送ります。古い version で書き込もうとすると `409 version_conflict` を返し、エラーメッセージに次に何をすればよいかを書いて返します。
+- 要約の `coveredThroughSeq` は、書き手が実際に読んで反映した最後の seq です。サーバーが進めることはなく、最新の seq を超える値は `422 seq_out_of_range` になります。要約を書いている間に追記された記録は、次のセッションで未読として読まれます。
 - `replace` は Claude Code や Codex の編集ツールと同じ old/new 方式です。`old` が 1 回だけ現れることを要求し、すべて置換したいときは `replaceAll: true` を付けます。
 - セクションや本文は `Content-Type: text/markdown` の生の本文でも、JSON でも送れます。
 
 エージェントには公開エンドポイント `GET /api/guide` を読ませれば、CLI と REST API の使い方が伝わります。たとえば `~/.claude/CLAUDE.md` や `~/.codex/AGENTS.md` に次のように書いておく運用を想定しています。
 
 ```
-作業状態は dura で管理する。最初に $DURA_URL/api/guide を読み、Reading の手順でジャーナルの全ページを確認してから作業を選ぶ。
+作業状態は dura で管理する。最初に $DURA_URL/api/guide を読み、Reading の手順で要約と未読のジャーナルを確認してから作業を選ぶ。
 ```
 
 ## CLI
@@ -86,6 +91,8 @@ dura section put plan --version 3 < plan.md 全文の書き込み（新規作成
 dura section replace tasks --version 7 --old "- [ ] CI" --new "- [x] CI"
 dura log --kind report "CI を追加した"       ジャーナルに追記（本文は引数、stdin、--file のどれか）
 dura journal --after 41                     指定した seq より後のジャーナル
+dura summary get                            要約を stdout に、version と反映済みの seq を stderr に出します
+dura summary put --covered 41 --version 3 < summary.md  要約の書き込み（新規作成のときは --version を省きます）
 dura status waiting --note "名前はどちらにしますか？"
 dura guide                                  /api/guide を表示
 ```
@@ -133,6 +140,8 @@ claude mcp add --transport http dura https://dura.example.com/mcp --header "Auth
 | `get_section` | `dura section get`（先頭に `<!-- version: N -->` が付きます） |
 | `put_section` | `dura section put` |
 | `replace_in_section` | `dura section replace` |
+| `get_summary` | `dura summary get`（先頭に version と反映済みの seq が付きます） |
+| `put_summary` | `dura summary put` |
 | `append_journal` | `dura log` |
 | `set_status` | `dura status` |
 

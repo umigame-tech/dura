@@ -46,6 +46,8 @@ describe("mcp", () => {
       "get_section",
       "put_section",
       "replace_in_section",
+      "get_summary",
+      "put_summary",
       "append_journal",
       "set_status",
     ]);

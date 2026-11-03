@@ -15,6 +15,7 @@ import {
   countJournal,
   createState,
   findSection,
+  findSummary,
   getSection,
   getState,
   journalPage,
@@ -204,7 +205,7 @@ ui.get("/s/:id", async (c) => {
   const { db } = c.get("deps");
   const id = c.req.param("id");
   const state = await getState(db, id);
-  const [sections, total] = await Promise.all([listSections(db, id), countJournal(db, id)]);
+  const [sections, total, summary] = await Promise.all([listSections(db, id), countJournal(db, id), findSummary(db, id)]);
   const pages = Math.max(Math.ceil(total / JOURNAL_PAGE), 1);
   const jpage = Math.min(Math.max(Number.parseInt(c.req.query("jpage") ?? "", 10) || 1, 1), pages);
   const journal = await journalPage(db, id, { limit: JOURNAL_PAGE, offset: (jpage - 1) * JOURNAL_PAGE });
@@ -265,6 +266,15 @@ ui.get("/s/:id", async (c) => {
       </div>
 
       <h2 id="journal">Journal</h2>
+      {summary && (
+        <details class="card journal-summary">
+          <summary>
+            Summary <span class="muted">· covers through #{summary.coveredThroughSeq} · v{summary.version} · {summary.updatedBy} ·{" "}
+            <Time iso={summary.updatedAt} /></span>
+          </summary>
+          <Markdown source={summary.content} />
+        </details>
+      )}
       {journal.length === 0 && <p class="muted">No journal entries yet.</p>}
       <ol class="journal">
         {journal.map((e) => (

@@ -15,6 +15,7 @@ import {
   getJournalEntry,
   getSummary,
   journalEntryMarkdown,
+  lastJournalSeq,
   listJournal,
   listJournalBefore,
   listRevisions,
@@ -116,14 +117,21 @@ function journalJson(e: JournalEntry, maxChars?: number) {
 function journalMarkdown(
   stateId: string,
   entries: JournalEntry[],
-  page: { after: number } | { before: number; olderBefore: number | null },
+  page: { after: number } | { before: number; olderBefore: number | null; latestSeq: number },
   maxChars?: number,
 ) {
   if (entries.length === 0) {
     return "after" in page ? `_No journal entries after #${page.after}._\n` : `_No journal entries before #${page.before}._\n`;
   }
   const parts = entries.map((e) => `${journalEntryMarkdown(stateId, e, maxChars)}\n`);
-  let text = `${parts.join("\n")}\n---\n\nLast journal seq: ${entries.at(-1)!.seq}.\n`;
+  const last = entries.at(-1)!.seq;
+  let text = `${parts.join("\n")}\n---\n\nLast journal seq: ${last}.\n`;
+  if ("before" in page && page.latestSeq > last) {
+    // Paging backwards from an older seq: say that newer entries exist, so "last" is not taken as the latest.
+    text +=
+      `Newer entries after #${last} (through #${page.latestSeq}) are not shown and have not been read. ` +
+      `Read them with after=${last}.\n`;
+  }
   if ("before" in page && page.olderBefore !== null) {
     text +=
       `Older entries before #${page.olderBefore} are not shown and have not been read. ` +
@@ -331,9 +339,12 @@ api.get("/states/:id/journal", async (c) => {
   await getState(db, id);
   if (before !== undefined) {
     // Newest first in the query, oldest first in the response, like after.
-    const { entries, olderBefore } = await listJournalBefore(db, id, { before, limit });
-    if (wantsMarkdown(c)) return markdown(c, journalMarkdown(id, entries, { before, olderBefore }, maxChars));
-    return c.json({ entries: entries.map((e) => journalJson(e, maxChars)), olderBefore });
+    const [{ entries, olderBefore }, latestSeq] = await Promise.all([
+      listJournalBefore(db, id, { before, limit }),
+      lastJournalSeq(db, id),
+    ]);
+    if (wantsMarkdown(c)) return markdown(c, journalMarkdown(id, entries, { before, olderBefore, latestSeq }, maxChars));
+    return c.json({ entries: entries.map((e) => journalJson(e, maxChars)), olderBefore, latestSeq });
   }
   const entries = await listJournal(db, id, { after: after ?? 0, limit });
   if (wantsMarkdown(c)) return markdown(c, journalMarkdown(id, entries, { after: after ?? 0 }, maxChars));

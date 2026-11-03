@@ -364,16 +364,36 @@ export async function getJournalEntry(db: DB, stateId: string, seq: number): Pro
 
 /** Character count used by maxChars: Unicode code points, so an excerpt never splits a surrogate pair. */
 export function excerpt(body: string, maxChars: number | undefined): { body: string; truncated: boolean; totalChars: number } {
+  // Callers only read totalChars when maxChars is set, so skip counting otherwise.
+  if (maxChars === undefined) return { body, truncated: false, totalChars: body.length };
   const chars = Array.from(body);
-  if (maxChars === undefined || chars.length <= maxChars) return { body, truncated: false, totalChars: chars.length };
+  if (chars.length <= maxChars) return { body, truncated: false, totalChars: chars.length };
   return { body: chars.slice(0, maxChars).join(""), truncated: true, totalChars: chars.length };
+}
+
+/** The fence of a code block left open at the end of `text` (CommonMark: closed by the same character, at least as long). */
+function openFence(text: string): string | undefined {
+  let open: string | undefined;
+  for (const line of text.split("\n")) {
+    const fence = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (!fence) continue;
+    if (open === undefined) open = fence;
+    else if (fence[0] === open[0] && fence.length >= open.length) open = undefined;
+  }
+  return open;
 }
 
 /** One journal entry as Markdown. With maxChars, a longer body is cut and the cut is stated with where to read it all. */
 export function journalEntryMarkdown(stateId: string, e: JournalEntry, maxChars?: number): string {
   // Counted on the stored body, like the JSON response, so both report the same totalChars.
   const x = excerpt(e.body, maxChars);
-  const lines = [`### #${e.seq} ${e.kind} by ${e.actor} at ${e.createdAt}`, "", x.body.trim()];
+  let text = x.body.trim();
+  // A cut inside a fenced code block would leave it open and swallow the notice and the next entries.
+  if (x.truncated) {
+    const fence = openFence(text);
+    if (fence) text += `\n${fence}`;
+  }
+  const lines = [`### #${e.seq} ${e.kind} by ${e.actor} at ${e.createdAt}`, "", text];
   if (x.truncated) {
     lines.push(
       "",

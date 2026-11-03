@@ -34,7 +34,8 @@ describe("journal: before (newest entries, oldest first)", () => {
     expect(exact.olderBefore).toBeNull();
 
     const none = await (await call(t, "GET", "/api/states/s/journal?before=1")).json();
-    expect(none).toEqual({ entries: [], olderBefore: null });
+    expect(none).toEqual({ entries: [], olderBefore: null, latestSeq: 5 });
+    expect(latest.latestSeq).toBe(5);
   });
 
   it("says in Markdown that older entries have not been read", async () => {
@@ -48,6 +49,10 @@ describe("journal: before (newest entries, oldest first)", () => {
 
     const all = await (await call(t, "GET", "/api/states/s/journal?before=999", undefined, { Accept: "text/markdown" })).text();
     expect(all).not.toContain("Older entries");
+    expect(all).not.toContain("Newer entries");
+    const middle = await (await call(t, "GET", "/api/states/s/journal?before=3", undefined, { Accept: "text/markdown" })).text();
+    expect(middle).toContain("Last journal seq: 2.");
+    expect(middle).toContain("Newer entries after #2 (through #3) are not shown and have not been read. Read them with after=2.");
     const empty = await (await call(t, "GET", "/api/states/s/journal?before=1", undefined, { Accept: "text/markdown" })).text();
     expect(empty).toBe("_No journal entries before #1._\n");
   });
@@ -108,6 +113,18 @@ describe("journal: maxChars and one whole entry", () => {
 
     expect((await call(t, "GET", "/api/states/s/journal?maxChars=0")).status).toBe(400);
     expect((await call(t, "GET", "/api/states/s?maxChars=x")).status).toBe(400);
+  });
+
+  it("closes a code fence that the cut left open", async () => {
+    const fenced = "Log:\n````sh\nnpm test\n```\nstill code\n" + "x".repeat(50) + "\n````\nafter";
+    const { call, t } = await withJournal([fenced, "next entry"]);
+    const md = await (await call(t, "GET", "/api/states/s/journal?maxChars=40", undefined, { Accept: "text/markdown" })).text();
+    // The inner ``` does not close the ```` block, so the closing fence is ````.
+    expect(md).toContain("still code\nxxxx\n````\n\n_[Truncated: showing 40 of");
+    const whole = await (await call(t, "GET", "/api/states/s/journal?maxChars=1000", undefined, { Accept: "text/markdown" })).text();
+    expect(whole.match(/^````$/gm)).toHaveLength(1);
+    const closed = await (await call(t, "GET", "/api/states/s/journal?maxChars=5", undefined, { Accept: "text/markdown" })).text();
+    expect(closed).toContain("Log:\n\n_[Truncated:");
   });
 
   it("reads one whole entry by seq", async () => {
@@ -171,6 +188,8 @@ describe("journal reading from the CLI and MCP", () => {
 
     for (const argv of [
       ["journal", "--after", "1", "--before", "3"],
+      ["journal", "--max-chars", "x"],
+      ["show", "--max-chars", "-1"],
       ["journal", "x"],
       ["journal", "1", "2"],
       ["journal", "1", "--limit", "2"],
@@ -208,6 +227,7 @@ describe("journal reading from the CLI and MCP", () => {
     expect(missing.isError).toBe(true);
     expect(missing.text).toContain("journal_entry_not_found");
     expect((await tool("get_journal_entry", { state: "s" })).isError).toBe(true);
+    expect((await tool("read_journal", { state: "s", maxChars: 0 })).text).toContain("maxChars must be at least 1");
     expect((await tool("read_journal", { state: "s", after: 1, before: 3 })).text).toContain("not both");
   });
 });

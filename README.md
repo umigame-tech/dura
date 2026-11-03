@@ -43,7 +43,7 @@ POST    /mcp                                          MCP（Streamable HTTP、�
 
 - `Accept: text/markdown` を付けると、`GET /api/states/:id` は全セクションと指定位置以降のジャーナルを 1 つの Markdown にまとめて返します。エージェントは 1 回の呼び出しで作業に必要な文脈を読み込めます。
 - セクションの書き込みは `If-Match` に「読んだときの version」を付けて送ります。古い version で書き込もうとすると `409 version_conflict` を返し、エラーメッセージに次に何をすればよいかを書いて返します。
-- ジャーナルは古い順に返します。`after=<seq>` はその seq より後を、`before=<seq>` はその seq より前のうち新しい `limit` 件を返します（`before` に大きな値を渡すと直近の `limit` 件）。さらに古い記録が残っていれば、JSON の `olderBefore` に次の `before` の値が入り、Markdown では「#X より前は未確認」と明示します。`after` と `before` は同時に使えません。
+- ジャーナルは古い順に返します。`after=<seq>` はその seq より後を、`before=<seq>` はその seq より前のうち新しい `limit` 件を返します（`before` に大きな値を渡すと直近の `limit` 件）。さらに古い記録が残っていれば、JSON の `olderBefore` に次の `before` の値が入り、Markdown では「#X より前は未確認」と明示します。JSON の `latestSeq` は State の最新の seq で、返した範囲より新しい記録があれば Markdown でも未確認と明示します。`after` と `before` は同時に使えません。
 - `maxChars=<n>` を付けると、それより長い本文を先頭 n 文字（コードポイント単位）に切り、省略したことと全体の文字数を示します（JSON では `truncated` と `totalChars`）。全文は `GET /api/states/:id/journal/:seq` で読みます。
 - 要約の `coveredThroughSeq` は、書き手が実際に読んで反映した最後の seq です。サーバーが進めることはなく、最新の seq を超える値は `422 seq_out_of_range` になります。要約を書いている間に追記された記録は、次のセッションで未読として読まれます。
 - `replace` は Claude Code や Codex の編集ツールと同じ old/new 方式です。`old` が 1 回だけ現れることを要求し、すべて置換したいときは `replaceAll: true` を付けます。

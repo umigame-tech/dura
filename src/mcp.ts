@@ -40,7 +40,11 @@ type Api = (method: string, path: string, init?: { body?: string; headers?: Reco
 
 const stateArg = { type: "string", description: "State id" };
 const nameArg = { type: "string", description: "Section name, e.g. goal, plan, design, tasks" };
-const afterArg = { type: "integer", minimum: 0, description: "Only journal entries after this seq (default 0)" };
+const afterArg = {
+  type: "integer",
+  minimum: 0,
+  description: "Only journal entries after this seq (default 0). Omit it when you pass before",
+};
 const beforeArg = {
   type: "integer",
   minimum: 0,

@@ -104,6 +104,7 @@ It returns the newest entries before that seq, still oldest first; a large value
 
 If older entries remain, the output ends with
 \`Older entries before #X are not shown and have not been read. Continue with before=X.\`
+If you started below the latest entry, it also says which newer entries are not shown.
 Entries you skipped this way are unread: do not treat them as read.
 
 \`--max-chars <n>\` (show and journal) cuts longer entry bodies to n characters and marks each cut
@@ -233,7 +234,8 @@ New journal entries only:
     curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
       "$DURA_URL/api/states/$DURA_STATE/journal?after=41&limit=1000"
 
-The newest entries before a seq (oldest first; JSON has \`olderBefore\`, the next \`before\`, or null),
+The newest entries before a seq (oldest first; JSON has \`olderBefore\`, the next \`before\` or null, and
+\`latestSeq\`, the newest seq in the state),
 bodies cut to 500 characters, and one whole entry:
 
     curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\

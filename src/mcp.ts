@@ -4,7 +4,7 @@ import { publicOrigin, resolveActor } from "./auth";
 import type { AppEnv } from "./env";
 import { ApiError } from "./lib/errors";
 import { versionFromEtag, writtenMessage } from "./ops/messages";
-import { argOf, fillPath, hasType, ifMatchHeader, isSummaryOperation, jsonBody, operations, queryString, typeName, type Operation, type OperationId, type Param } from "./ops/spec";
+import { argOf, fillPath, hasType, ifMatchHeader, isSummaryOperation, jsonBody, mcpTools, operations, queryString, typeName, type Operation, type OperationId, type Param } from "./ops/spec";
 
 /**
  * MCP (Streamable HTTP) adapter. Stateless and JSON-only: every tool call is translated into a
@@ -21,6 +21,7 @@ Before choosing work, call get_summary. If the state has a journal summary, it c
 If a page holds as many journal entries as the limit, continue with read_journal from the last seq shown.
 To find a past decision or report, call search_journal (it does not replace reading the unread entries).
 If the status is waiting, the status note is a question for the human: get their decision before resuming.
+If the state does not exist (not_found), confirm its title and goal with the user, then call create_state. get_guide returns the full usage guide.
 
 Report each milestone with append_journal (kind report): what changed, the result, links, the next step.
 When the journal has grown, update the summary with put_summary (coveredThroughSeq = the last seq you reflected).
@@ -112,12 +113,11 @@ function hint(code: string, args: Json, currentVersion?: number): string | undef
   return undefined;
 }
 
-const exposed = (p: Param) => !p.mcp?.skip;
 const requiredFor = (p: Param) => p.mcp?.required ?? p.required ?? false;
 
-function schemaOf(op: Operation): Json {
+function schemaOf(params: readonly Param[]): Json {
   const properties: Json = {};
-  for (const p of op.params.filter(exposed)) {
+  for (const p of params) {
     const prop: Json = { type: p.type === "record" ? "object" : p.type };
     if (p.type === "record") prop.additionalProperties = { type: "string" };
     if (p.enum) prop.enum = p.enum;
@@ -126,14 +126,14 @@ function schemaOf(op: Operation): Json {
     prop.description = p.description;
     properties[argOf(p)] = prop;
   }
-  const required = op.params.filter((p) => exposed(p) && requiredFor(p)).map(argOf);
+  const required = params.filter(requiredFor).map(argOf);
   return { type: "object", properties, required, additionalProperties: false };
 }
 
 /** Checks the arguments against the spec and returns them by their HTTP names. */
-function inputOf(op: Operation, args: Json): Json {
+function inputOf(op: Operation, params: readonly Param[], args: Json): Json {
   const input: Json = {};
-  for (const p of op.params.filter(exposed)) {
+  for (const p of params) {
     const key = argOf(p);
     // null means "not given", as before the spec; clearing a value over MCP is not offered.
     let v = args[key] === null ? undefined : args[key];
@@ -165,25 +165,23 @@ const OUTPUT: Partial<Record<OperationId, (res: Response, text: string) => strin
   },
 };
 
-
-const TOOLS: Tool[] = operations().flatMap(([id, op]): Tool[] => {
-  if ("skip" in op.mcp) return [];
-  return [
-    {
-      name: op.mcp.tool,
-      description: op.mcp.description,
-      inputSchema: schemaOf(op),
+const TOOLS: Tool[] = operations().flatMap(([id, op]) =>
+  mcpTools(op).map(
+    (tool): Tool => ({
+      name: tool.tool,
+      description: tool.description,
+      inputSchema: schemaOf(tool.params),
       call: async (args, api) => {
-        const input = inputOf(op, args);
+        const input = inputOf(op, tool.params, args);
         const body = jsonBody(op, input);
         const headers = { ...(op.markdown === "no" ? {} : MD), ...(body !== undefined ? JSON_BODY : {}), ...ifMatchHeader(op, input) };
         const res = await api(op.method, `${fillPath(op, input as Record<string, string | number>)}${queryString(op, input)}`, { body, headers });
         const text = await ok(res, args, isSummaryOperation(op) ? "summary" : "section");
-        return OUTPUT[id]?.(res, text) ?? writtenMessage(id, text) ?? text;
+        return OUTPUT[id]?.(res, text) ?? writtenMessage(id, text, input) ?? text;
       },
-    },
-  ];
-});
+    }),
+  ),
+);
 
 interface RpcRequest {
   jsonrpc?: unknown;

@@ -116,6 +116,29 @@ function searchMarkdown(
   return `${text}${reminder}`;
 }
 
+/**
+ * Every version, newest first. Each body sits in a code fence longer than any backtick run in it, so
+ * headings in a body cannot be mistaken for the version headings and the text comes back as written.
+ */
+function revisionsMarkdown(
+  what: string,
+  revisions: { version: number; content: string; updatedBy: string; createdAt: string; coveredThroughSeq?: number }[],
+  maxChars?: number,
+) {
+  const parts = revisions.map((r) => {
+    const covered = r.coveredThroughSeq !== undefined ? `, covers journal through #${r.coveredThroughSeq}` : "";
+    const head = `## Version ${r.version}${covered}\n\nBy ${r.updatedBy} at ${r.createdAt}.\n\n`;
+    if (r.content === "") return `${head}_(empty)_\n`;
+    const chars = [...r.content];
+    const cut = maxChars !== undefined && chars.length > maxChars;
+    const body = cut ? chars.slice(0, maxChars).join("") : r.content;
+    const fence = "`".repeat(Math.max(3, ...[...body.matchAll(/`+/g)].map((m) => m[0].length + 1)));
+    const note = cut ? `\n_[Truncated: showing ${maxChars} of ${chars.length} characters. Read the whole version without maxChars.]_\n` : "";
+    return `${head}${fence}markdown\n${body}${body.endsWith("\n") ? "" : "\n"}${fence}\n${note}`;
+  });
+  return `# ${what}: ${revisions.length} version${revisions.length === 1 ? "" : "s"}, newest first\n\n${parts.join("\n")}`;
+}
+
 const str = (input: Input, key: string) => input[key] as string;
 const optStr = (input: Input, key: string) => input[key] as string | undefined;
 const optInt = (input: Input, key: string) => input[key] as number | undefined;
@@ -202,7 +225,9 @@ const handlers: Handlers = {
   },
 
   listSectionRevisions: async (c, input) => {
-    const revisions = await listRevisions(c.get("deps").db, str(input, "id"), str(input, "name"));
+    const name = str(input, "name");
+    const revisions = await listRevisions(c.get("deps").db, str(input, "id"), name);
+    if (wantsMarkdown(c)) return markdown(c, revisionsMarkdown(`Section ${name}`, revisions, optInt(input, "maxChars")));
     return c.json({
       revisions: revisions.map((r) => ({
         version: r.version,
@@ -225,6 +250,7 @@ const handlers: Handlers = {
 
   listSummaryRevisions: async (c, input) => {
     const revisions = await listSummaryRevisions(c.get("deps").db, str(input, "id"));
+    if (wantsMarkdown(c)) return markdown(c, revisionsMarkdown("Journal summary", revisions, optInt(input, "maxChars")));
     return c.json({
       revisions: revisions.map((r) => ({
         version: r.version,

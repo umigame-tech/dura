@@ -104,6 +104,10 @@ dura search SQLite --kind decision          ジャーナルを新しい順に検
 dura summary get                            要約を stdout に、version と反映済みの seq を stderr に出します
 dura summary put --covered 41 --version 3 < summary.md  要約の書き込み（新規作成のときは --version を省きます）
 dura status waiting --note "名前はどちらにしますか？"
+dura title "検索の書き直し（第 2 期）"          State のタイトルを変える
+dura create --id search --title "検索の書き直し" --section goal=goal.md  State を作る（--section は繰り返せます）
+dura section revisions tasks                セクションの全版（新しい順）
+dura summary revisions                      要約の全版（新しい順、各版の反映済みの seq 付き）
 dura guide                                  /api/guide を表示
 ```
 
@@ -144,7 +148,9 @@ claude mcp add --transport http dura https://dura.example.com/mcp --header "Auth
 
 | ツール | CLI で言うと |
 | --- | --- |
+| `get_guide` | `dura guide` |
 | `list_states` | `dura list` |
+| `create_state` | `dura create`（`title`、`id`、`status`、`note`、`sections`） |
 | `show_state` | `dura show` |
 | `read_journal` | `dura journal`（`after` か `before`、`limit`、`maxChars`） |
 | `get_journal_entry` | `dura journal <seq>` |
@@ -152,12 +158,16 @@ claude mcp add --transport http dura https://dura.example.com/mcp --header "Auth
 | `get_section` | `dura section get`（先頭に `<!-- version: N -->` が付きます） |
 | `put_section` | `dura section put` |
 | `replace_in_section` | `dura section replace` |
+| `list_section_revisions` | `dura section revisions` |
 | `get_summary` | `dura summary get`（先頭に version と反映済みの seq が付きます） |
 | `put_summary` | `dura summary put` |
+| `list_summary_revisions` | `dura summary revisions` |
 | `append_journal` | `dura log` |
 | `set_status` | `dura status` |
+| `set_title` | `dura title` |
 
-- State の ID はツールごとに `state` 引数で渡します。State の作成は人間の確認が前提なので、MCP からはできません。
+- State の ID はツールごとに `state` 引数で渡します。`create_state` の説明は、State を作る前にユーザーに確認するよう求めています。
+- REST API の操作は、すべて CLI と MCP からも使えます（`test/ops.test.ts` が確かめます）。
 - ステートレスで、応答は JSON だけです（SSE やセッション ID は使いません）。OAuth には対応していないため、ヘッダーを設定できるクライアントで使います。
 - `initialize` の `instructions` に、読み書きの手順を短くまとめて返します。
 

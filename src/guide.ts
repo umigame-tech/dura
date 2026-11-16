@@ -1,4 +1,4 @@
-import { JOURNAL_LIMIT, operations, SEARCH_LIMIT } from "./ops/spec";
+import { cliCommands, JOURNAL_LIMIT, mcpTools, operations, SEARCH_LIMIT } from "./ops/spec";
 
 /** Usage guide for agents, served at GET /api/guide as Markdown. */
 export function guideMarkdown(origin: string): string {
@@ -169,12 +169,19 @@ in \`--note\`; use \`completed\` with a short summary when all goal criteria are
     dura status active --note "Resuming after the human decision."
     dura status completed --note "All goal criteria are met."
 
-The CLI does not create states. If the state does not exist, confirm its title and
-goal with the human, then use the REST API below (with a token permitted to create states):
+Change the title of the state:
 
-    curl -sS -X POST -H "Authorization: Bearer $DURA_TOKEN" -H "Content-Type: application/json" \\
-      -d '{"id": "search-rewrite", "title": "Rewrite search", "sections": {"goal": "..."}}' \\
-      "$DURA_URL/api/states"
+    dura title "Rewrite search (phase 2)"
+
+If the state does not exist, confirm its title and goal with the human, then create it
+(with a token permitted to create states; \`--section\` repeats and reads each file):
+
+    dura create --id search-rewrite --title "Rewrite search" --section goal=goal.md
+
+Every earlier version of a section or of the summary stays readable, newest first:
+
+    dura section revisions plan
+    dura summary revisions
 
 ## When a write is rejected
 
@@ -309,8 +316,13 @@ Send \`Accept: text/markdown\` to get Markdown instead of JSON where it makes se
 /** "`list_states` (list), `show_state` (show), ..." from the spec, so the guide lists every tool. */
 function toolMap(): string {
   const items = operations().flatMap(([, op]) => {
-    if ("skip" in op.mcp) return [];
-    return [`\`${op.mcp.tool}\`${"command" in op.cli ? ` (${[op.cli.command, ...op.params.filter((p) => p.cli?.positional === true).map((p) => p.cli?.label ?? p.name)].join(" ")})` : ""}`];
+    const commands = cliCommands(op);
+    // An operation offered as several commands and tools lists them in the same order.
+    return mcpTools(op).map((tool, i) => {
+      const cmd = commands[i];
+      const words = cmd ? [cmd.command, ...cmd.params.filter((p) => p.cli?.positional === true).map((p) => p.cli?.label ?? p.name)] : [];
+      return `\`${tool.tool}\`${cmd ? ` (${words.join(" ")})` : ""}`;
+    });
   });
   return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }

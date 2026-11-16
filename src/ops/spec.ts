@@ -172,6 +172,15 @@ const maxChars = {
   cli: { label: "<n>", help: "cut longer entry bodies to n characters (the cut is marked)" },
 } as const satisfies Param;
 
+const revisionChars = {
+  name: "maxChars",
+  type: "integer",
+  in: "query",
+  minimum: 1,
+  description: "In Markdown, cut each version longer than this many characters; the cut is marked (JSON always has the whole text)",
+  cli: { label: "<n>", help: "cut each version to n characters (the cut is marked)" },
+} as const satisfies Param;
+
 const version = (what: string, required = false) =>
   ({
     name: "version",
@@ -401,7 +410,7 @@ export const OPERATIONS = {
     auth: "read",
     markdown: "yes",
     doc: "every version of a section, newest first",
-    params: [stateId, sectionName],
+    params: [stateId, sectionName, revisionChars],
     cli: { command: "section revisions", summary: "Print every version of a section, newest first" },
     mcp: {
       tool: "list_section_revisions",
@@ -461,7 +470,7 @@ export const OPERATIONS = {
     auth: "read",
     markdown: "yes",
     doc: "every version of the summary, newest first",
-    params: [stateId],
+    params: [stateId, revisionChars],
     cli: { command: "summary revisions", summary: "Print every version of the journal summary, newest first" },
     mcp: {
       tool: "list_summary_revisions",

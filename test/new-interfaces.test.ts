@@ -25,6 +25,20 @@ describe("revisions in the API", () => {
     expect(md.indexOf("## Version 2, covers journal through #1")).toBeLessThan(md.indexOf("## Version 1, covers journal through #0"));
     expect(md).toContain("Second.");
   });
+
+  it("keeps each body as written, fenced, and cuts it with maxChars", async () => {
+    const { call, t } = await withState();
+    const body = "## Version 9\n\n```js\nx\n```\n  ";
+    await call(t, "PUT", "/api/states/s/sections/tasks", { content: body }, { "If-Match": "2" });
+    await call(t, "PUT", "/api/states/s/sections/tasks", { content: "" }, { "If-Match": "3" });
+    const md = await (await call(t, "GET", "/api/states/s/sections/tasks/revisions", undefined, { Accept: "text/markdown" })).text();
+    expect(md).toContain(`\`\`\`\`markdown\n${body}\n\`\`\`\``);
+    expect(md).toContain("## Version 4\n\nBy agent at");
+    expect(md).toMatch(/## Version 4\n\nBy [^\n]+\n\n_\(empty\)_/);
+    const cut = await (await call(t, "GET", "/api/states/s/sections/tasks/revisions?maxChars=3", undefined, { Accept: "text/markdown" })).text();
+    expect(cut).toContain("```markdown\n## \n```");
+    expect(cut).toContain(`_[Truncated: showing 3 of ${body.length} characters.`);
+  });
 });
 
 describe("the CLI", () => {
@@ -60,6 +74,9 @@ describe("the CLI", () => {
     const json = await exec(ctx, ["create", "--title", "Generated id", "--json"]);
     expect(JSON.parse(json.stdout).state.id).toBe("generated-id");
 
+    const twice = await exec(ctx, ["create", "--title", "x", "--section", "goal=g.md", "--section", "goal=p.md"], { "g.md": "", "p.md": "" });
+    expect(twice).toMatchObject({ code: 2, stderr: "dura: --section names goal twice.\n" });
+    expect((await exec(ctx, ["create", "--title", "x", "--status", "done"])).code).toBe(2);
     const bad = await exec(ctx, ["create", "--title", "x", "--section", "goal"]);
     expect(bad.code).toBe(2);
     expect(bad.stderr).toContain("--section takes <name>=<file>");
@@ -73,6 +90,10 @@ describe("the CLI", () => {
     const { state } = await (await ctx.call(ctx.t, "GET", "/api/states/s")).json();
     expect(state).toMatchObject({ title: "Renamed", status: "active" });
     expect((await exec(ctx, ["title"])).stderr).toContain("Missing <title>");
+    const dash = await exec(ctx, ["title", "-draft"]);
+    expect(dash.code).toBe(2);
+    expect(dash.stderr).toContain('put it after --, e.g. dura title -- "-draft"');
+    expect((await exec(ctx, ["title", "--", "-draft"])).stderr).toBe('Title of s is now "-draft".\n');
   });
 
   it("prints the revisions of a section and of the summary", async () => {
@@ -106,6 +127,9 @@ describe("MCP", () => {
       text: "Created state m (active).",
     });
     expect((await tool("show_state", { state: "m" })).text).toContain("# Goal");
+    expect((await tool("create_state", { id: "w", title: "Waiting", status: "waiting", note: "Q?" })).text).toBe("Created state w (waiting).");
+    const { state } = await (await ctx.call(ctx.t, "GET", "/api/states/w")).json();
+    expect(state.statusNote).toBe("Q?");
     expect((await tool("create_state", { title: "x", sections: { goal: 1 } })).text).toBe("sections must be an object of strings.");
     expect((await tool("create_state", {})).text).toBe("title is required.");
 

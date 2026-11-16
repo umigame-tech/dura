@@ -304,7 +304,9 @@ export async function run(argv: string[], io: Io): Promise<number> {
   try {
     parsed = parseArgs({ args: joinStringOptions(argv), allowPositionals: true, options: OPTIONS });
   } catch (err) {
-    io.stderr(`dura: ${(err as Error).message}\n\n${USAGE}`);
+    // An argument that starts with "-" (e.g. a title) reads as an option unless it comes after "--".
+    const dash = /Unknown option '-/.test((err as Error).message) ? `To pass an argument that starts with "-", put it after --, e.g. dura title -- "-draft".\n` : "";
+    io.stderr(`dura: ${(err as Error).message}\n${dash}\n${USAGE}`);
     return 2;
   }
   const opts = parsed.values as Record<string, string | boolean | undefined>;
@@ -376,11 +378,13 @@ export async function run(argv: string[], io: Io): Promise<number> {
         const raw = opts[flagOf(p)] as string | boolean | string[] | undefined;
         if (Array.isArray(raw)) {
           // --section goal=goal.md --section plan=plan.md
-          const record: Record<string, string> = {};
+          const record: Record<string, string> = Object.create(null);
           for (const item of raw) {
             const eq = item.indexOf("=");
             if (eq <= 0) throw new CliError(`--${flagOf(p)} takes ${labelOf(p)} (got ${JSON.stringify(item)}).`);
-            record[item.slice(0, eq)] = await io.readFile(item.slice(eq + 1));
+            const name = item.slice(0, eq);
+            if (name in record) throw new CliError(`--${flagOf(p)} names ${name} twice.`);
+            record[name] = await io.readFile(item.slice(eq + 1));
           }
           v = record;
         } else v = typeof raw === "string" ? convert(p, raw) : raw;

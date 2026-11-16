@@ -11,6 +11,12 @@ export const STATUSES = ["active", "waiting", "completed", "abandoned"] as const
 /** Page sizes of the journal. The store applies them; the spec tells clients. */
 export const JOURNAL_LIMIT = { default: 200, max: 1000 } as const;
 export const SEARCH_LIMIT = { default: 20, max: 100 } as const;
+/**
+ * The resume procedure the guide, the MCP instructions and the CLI hints describe: read the entries after the
+ * summary in pages of RESUME.page entries with bodies cut at RESUME.maxChars, and update the summary when about
+ * RESUME.summaryAfter entries have accumulated after it.
+ */
+export const RESUME = { page: 100, maxChars: 2000, summaryAfter: 20 } as const;
 
 export type ParamType = "string" | "integer" | "boolean" | "record";
 
@@ -284,7 +290,7 @@ export const OPERATIONS = {
     mcp: {
       tool: "show_state",
       description:
-        "Read a state as Markdown: status, every section with its version, and journal entries after `after` (oldest first). The output ends with the last journal seq; pass it as `after` next time.",
+        "Read a state as Markdown: status, every section with its version, and journal entries after `after` (oldest first). Start a new session with `after` = the summary's coveredThroughSeq (get_summary; 0 without one). The output ends with the last journal seq and says when newer entries are not shown and have not been read; then continue with read_journal from that seq.",
     },
   },
   readJournal: {
@@ -299,7 +305,7 @@ export const OPERATIONS = {
     mcp: {
       tool: "read_journal",
       description:
-        "Read journal entries after `after`, oldest first. If the page holds as many entries as `limit`, call again with the last seq shown. " +
+        "Read journal entries after `after`, oldest first. While the output says newer entries are not shown and have not been read, call again with the last seq shown. " +
         "With `before` instead, read the newest `limit` entries before that seq (still oldest first); if older entries remain, the output says so and gives the next `before`.",
     },
   },

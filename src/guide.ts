@@ -1,4 +1,4 @@
-import { cliCommands, JOURNAL_LIMIT, mcpTools, operations, SEARCH_LIMIT } from "./ops/spec";
+import { cliCommands, JOURNAL_LIMIT, mcpTools, operations, RESUME, SEARCH_LIMIT } from "./ops/spec";
 
 /** Usage guide for agents, served at GET /api/guide as Markdown. */
 export function guideMarkdown(origin: string): string {
@@ -40,7 +40,7 @@ To use a locally built CLI instead, run \`npm run cli:build\` in the dura reposi
 or run \`npm link ./cli\` there to make \`dura\` available on PATH.
 A one-line instruction in your agent configuration can be:
 
-    Manage work state with dura. First read $DURA_URL/api/guide, then follow its Reading procedure (summary first, then every unread journal page) before choosing work.
+    Manage work state with dura. First read $DURA_URL/api/guide, then follow its Reading procedure (summary and sections, then every journal entry after the summary) before choosing work.
 
 If your client is connected to dura over MCP (\`POST ${origin}/mcp\` with the same bearer token),
 the tools map to the CLI commands below: ${toolMap()}. Pass the state id as \`state\` and
@@ -65,40 +65,69 @@ Changing it to \`waiting\` or \`completed\` notifies the human.
 
 ## Reading
 
-First check for a journal summary:
+A new session restores its context in three steps: the summary and the sections, then every
+journal entry after the summary, then past entries only as needed.
 
-    dura summary get
+1. Read the journal summary:
 
-If it exists, its covered seq is printed on stderr (\`covers journal through #41\`). Read it,
-then start below with \`--after 41\` instead of 0: the summary stands in for the older entries.
-If it does not exist (\`summary_not_found\`), read the whole journal as below.
+       dura summary get
 
-Start with the sections and the first page of unread journal entries:
+   Its covered seq is printed on stderr (\`covers journal through #41\`): call it C. The summary
+   stands in for the entries up to C. If there is none (\`summary_not_found\`), C is 0.
 
-    dura show --after <last-read-seq> --limit ${JOURNAL_LIMIT.max}
+2. Read the sections and the first page of the entries after C:
 
-Use the summary's covered seq, or 0 if there is no summary and you have no saved cursor. This returns at most
-${JOURNAL_LIMIT.max} journal entries, not necessarily the latest page. Complete the paging
-procedure below before choosing work.
+       dura show --after C --limit ${RESUME.page} --max-chars ${RESUME.maxChars}
 
-Read the goal, plan, tasks and journal before choosing work. If status is
-\`waiting\`, read the status note and obtain the human's decision before resuming.
+   The document ends with the last journal seq. If it says entries after it \`are not shown and
+   have not been read\`, read on with the journal command until it no longer says so:
 
-\`--after <seq>\` limits the journal to entries newer than one you have already read.
-The document ends with the last journal seq; pass it next time:
+       dura journal --after <last seq> --limit ${RESUME.page} --max-chars ${RESUME.maxChars}
 
-    dura show --after 41 --limit ${JOURNAL_LIMIT.max}
-    dura journal --after 41 --limit ${JOURNAL_LIMIT.max}
+   Read every entry after C before choosing work: the latest page alone can miss a decision or an
+   open question. If there are many (more than one page), see "Many unread entries" below.
 
-Journal entries are returned oldest first, with a default limit of ${JOURNAL_LIMIT.default} and a
-maximum of ${JOURNAL_LIMIT.max} per request. If a page contains as many entries as the limit,
-continue with \`dura journal --after <last-page-seq> --limit ${JOURNAL_LIMIT.max}\`, using the
-last seq from the page just read. Repeat until a page contains fewer than ${JOURNAL_LIMIT.max}
-entries. Use \`journal\` for subsequent pages so sections are fetched only once.
-Keep the last seq you read so you can resume without skipping entries.
+3. To find something the summary covers (why a decision was made, an earlier report), search,
+   or look back from it (\`--before\` excludes the seq it is given; with C = 41, pass 42):
 
-To look back from the latest entries instead, pass \`--before\` (not together with \`--after\`).
-It returns the newest entries before that seq, still oldest first; a large value gives the latest:
+       dura search sqlite migration --kind decision --limit 20 --max-chars 500
+       dura journal --before 42 --limit 20 --max-chars 500
+
+Read the goal, plan and tasks before choosing work. If status is \`waiting\`, read the status
+note and obtain the human's decision before resuming.
+
+Start every new session from the summary's covered seq (or 0), not from a seq you remember from
+an earlier session: the context of that session is gone, and only the summary carries it forward.
+Within one session, \`--after <last seq you read>\` picks up entries appended since.
+
+### Many unread entries, or no summary yet
+
+A state that has no summary yet, or whose summary is far behind, can have more unread entries than
+fit in one page. Read them a page at a time and keep the progress in the summary, so nothing is
+skipped and nothing has to be read twice:
+
+1. Read a page as in step 2 above.
+2. Orchestrator (or an agent working alone): write the summary with what you have read so far:
+   the current situation, decisions, open questions and next steps, keeping what the previous
+   summary said that still holds. Pass the last seq of the page with \`--covered\`, and the
+   version you read (no \`--version\` when creating the first summary):
+
+       dura summary put --covered <last seq of the page> --version <version> < summary.md
+
+3. Continue with the next page, and repeat until no unread entries are left.
+
+If your session ends partway, the next one starts from the summary and loses nothing.
+A sub-agent reads what its task needs and does not write the summary.
+
+\`--max-chars\` cuts longer bodies and marks each cut with the full length. An entry you saw only
+cut is not fully read: before the summary covers it, read the whole entry when the rest may matter
+(a decision, a question, a result), by its seq:
+
+    dura journal 37
+
+Journal entries are always returned oldest first. \`--limit\` defaults to ${JOURNAL_LIMIT.default} and
+is at most ${JOURNAL_LIMIT.max}; \`--after\` and \`--before\` cannot be combined.
+\`--before <seq>\` returns the newest entries before that seq (a large value gives the latest):
 
     dura journal --before 1000000000 --limit 20
 
@@ -107,19 +136,9 @@ If older entries remain, the output ends with
 If you started below the latest entry, it also says which newer entries are not shown.
 Entries you skipped this way are unread: do not treat them as read.
 
-\`--max-chars <n>\` (show and journal) cuts longer entry bodies to n characters and marks each cut
-with the full length. Read a whole entry by its seq:
-
-    dura journal --before 1000000000 --limit 20 --max-chars 500
-    dura journal 37
-
-To find a past decision or report, search the journal (newest first). Every keyword must occur
-in the body (ASCII letters ignore case; quote a phrase as one argument), and \`--kind\` filters by kind.
-If more matches remain, the output gives the next \`--before\`. Search does not replace reading the
-entries after the summary's covered seq:
-
-    dura search sqlite migration --kind decision --limit 20 --max-chars 500
-    dura search --kind decision --before 120
+The search above returns matches newest first. Every keyword must occur in the body (ASCII letters ignore
+case; quote a phrase as one argument), and \`--kind\` filters by kind. If more matches remain,
+the output gives the next \`--before\`. Search does not replace reading the entries after C.
 
 One section (raw Markdown on stdout; its version on stderr):
 
@@ -153,7 +172,7 @@ Replace a whole section (omit \`--version\` only when creating a new section):
 
     dura section put plan --version 7 < plan.md
 
-Update the journal summary when the journal has grown (the orchestrator does this).
+Update the journal summary when about ${RESUME.summaryAfter} entries have accumulated after it (the orchestrator does this).
 Write the current situation, key decisions, open questions and next steps, and pass with
 \`--covered\` the last seq you actually read and reflected. Never pass a newer seq: entries
 appended while you were writing must stay unread for the next session. Pass the summary
@@ -204,14 +223,13 @@ REST error responses are JSON: \`{"error": {"code": "...", "message": "..."}}\`.
 
 ## Suggested loop
 
-1. Orchestrator: run \`dura summary get\`, then \`dura show --after <seq> --limit ${JOURNAL_LIMIT.max}\`, where
-   \`<seq>\` is the summary's covered seq (0 if there is no summary).
-   If the journal page is full, continue with \`dura journal --after <last-page-seq> --limit ${JOURNAL_LIMIT.max}\`
-   until a page contains fewer than ${JOURNAL_LIMIT.max} entries. Read all pages before choosing work.
+1. Orchestrator: follow Reading: \`dura summary get\`, then \`dura show --after C --limit ${RESUME.page} --max-chars ${RESUME.maxChars}\`
+   and \`dura journal --after <last seq>\` until no unread entries are left. With many unread entries,
+   update the summary page by page as described there.
 2. Pick the next task and hand it to a sub-agent together with \`DURA_STATE\`.
 3. Sub-agent: do the work, then append a report with \`dura log --kind report\`.
 4. Orchestrator: read new reports, update \`tasks\` / \`design\` with targeted replacements, repeat.
-   When the journal has grown, update the summary with \`dura summary put --covered <seq>\`.
+   When about ${RESUME.summaryAfter} entries have accumulated after the summary, update it with \`dura summary put --covered <seq>\`.
 5. When the done-criteria in \`goal\` are met, set status \`completed\` with a summary.
    If you are blocked on a human decision, set \`waiting\` with the question and stop.
 
@@ -222,32 +240,30 @@ The CLI is a client of this REST API. Direct HTTP requests use
 
 ### Read with HTTP
 
-Read the sections and the first journal page:
-
-    curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
-      "$DURA_URL/api/states/$DURA_STATE?after=0&limit=${JOURNAL_LIMIT.max}"
-
-\`after=<seq>\` limits the journal to entries newer than one you have already read.
-The document ends with the last returned journal seq. If a page has ${JOURNAL_LIMIT.max} entries,
-continue with the journal endpoint using that seq as after until a page has fewer
-entries. Save the last seq for your next session; use the same procedure as Reading above.
-
-The journal summary (raw Markdown; its version is in \`ETag\` and the covered seq in
-\`X-Covered-Through-Seq\`; \`404 summary_not_found\` if there is none). The state document above also
-starts with it. Read the journal after the covered seq:
+The journal summary (raw Markdown; its version is in \`ETag\` and the covered seq C in
+\`X-Covered-Through-Seq\`; \`404 summary_not_found\` if there is none, then C is 0):
 
     curl -sS -i -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
       "$DURA_URL/api/states/$DURA_STATE/summary"
+
+The summary, the sections and the first page of the journal after C (follow Reading above):
+
+    curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
+      "$DURA_URL/api/states/$DURA_STATE?after=C&limit=${RESUME.page}&maxChars=${RESUME.maxChars}"
+
+The document ends with the last returned journal seq, and says when newer entries are not shown
+(JSON has \`latestSeq\`, the newest seq in the state). Then read on with the journal endpoint
+using that seq as after, until no unread entries are left.
 
 One section (raw Markdown; its version is in the \`ETag\` header):
 
     curl -sS -i -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
       "$DURA_URL/api/states/$DURA_STATE/sections/plan"
 
-New journal entries only:
+New journal entries only (JSON has \`latestSeq\` too):
 
     curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
-      "$DURA_URL/api/states/$DURA_STATE/journal?after=41&limit=${JOURNAL_LIMIT.max}"
+      "$DURA_URL/api/states/$DURA_STATE/journal?after=41&limit=${RESUME.page}&maxChars=${RESUME.maxChars}"
 
 The newest entries before a seq (oldest first; JSON has \`olderBefore\`, the next \`before\` or null, and
 \`latestSeq\`, the newest seq in the state),

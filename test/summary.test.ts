@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { run, type Io } from "../cli/src/cli";
 import { journalSummaryRevisions, passkeys } from "../src/db/schema";
+import { RESUME } from "../src/ops/spec";
 import { ORIGIN, setup } from "./helpers";
 
 async function withJournal(entries = 3) {
@@ -206,7 +207,7 @@ describe("journal summary in the CLI", () => {
 
     const get = await exec(["summary", "get"]);
     expect(get.stdout).toBe("Entries 1-2.\n");
-    expect(get.stderr).toContain("version: 1, covers journal through #2 (read on with --after 2)");
+    expect(get.stderr).toContain(`version: 1, covers journal through #2 (read on with --after 2 --limit ${RESUME.page} --max-chars ${RESUME.maxChars}`);
     expect(JSON.parse((await exec(["summary", "get", "--json"])).stdout).summary.coveredThroughSeq).toBe(2);
 
     const stale = await exec(["summary", "put", "--covered", "3", "--version", "0"], "x");

@@ -60,7 +60,8 @@ describe("journal: before (newest entries, oldest first)", () => {
   it("keeps after / limit as before, rejects after with before, and checks permissions", async () => {
     const { call, t, tokenFor } = await withJournal(numbered(4));
     const after = await (await call(t, "GET", "/api/states/s/journal?after=1&limit=2")).json();
-    expect(after).toEqual({ entries: expect.any(Array) });
+    // The entries keep their meaning and order; latestSeq is added so a full page is not taken as the end.
+    expect(after).toEqual({ entries: expect.any(Array), latestSeq: 4 });
     expect(seqs(after.entries)).toEqual([2, 3]);
     expect(after.entries[0]).not.toHaveProperty("truncated");
 

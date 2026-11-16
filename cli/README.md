@@ -38,6 +38,14 @@ dura summary revisions                      Every version of the summary, newest
 dura guide                                  Print /api/guide
 ```
 
+To resume work, read the summary and then every journal entry after it (the Reading procedure in `dura guide`):
+
+```bash
+dura summary get                                         # its covered seq C is on stderr (0 if there is none)
+dura show --after C --limit 100 --max-chars 2000         # sections and the first page after C
+dura journal --after <last seq> --limit 100 --max-chars 2000   # while the page says newer entries are not shown
+```
+
 Run `dura --help` for every option, and `dura guide` for how agents should use dura.
 A command fails (exit code 2, nothing sent) when it gets a flag or an argument it does not take, e.g. `dura show --kind x` or `dura show extra`.
 

@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { version } from "../package.json";
 import { versionFromEtag, writtenMessage } from "../../src/ops/messages";
-import { cliCommands, fillPath, flagOf, ifMatchHeader, isSummaryOperation, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "../../src/ops/spec";
+import { cliCommands, fillPath, flagOf, ifMatchHeader, isSummaryOperation, jsonBody, operations, queryString, RESUME, type Operation, type OperationId, type Param } from "../../src/ops/spec";
 
 /** Everything the CLI touches outside itself, so tests can run it against an in-process app. */
 export interface Io {
@@ -100,7 +100,7 @@ function hint(err: ResponseError, ctx: { summary?: boolean; name?: string; state
     switch (err.body.code) {
       case "version_conflict":
         return (
-          "Run `dura summary get`, read the journal after its covered seq (`dura journal --after <seq>`), " +
+          `Run \`dura summary get\`, read the journal after its covered seq (\`dura journal --after <seq> --limit ${RESUME.page} --max-chars ${RESUME.maxChars}\`), ` +
           `merge your summary into it, and retry with --version ${err.body.currentVersion ?? "<new version>"}.`
         );
       case "precondition_required":
@@ -108,7 +108,8 @@ function hint(err: ResponseError, ctx: { summary?: boolean; name?: string; state
       case "seq_out_of_range":
         return "Set --covered to the last journal seq you actually read and reflected in the summary.";
       case "summary_not_found":
-        return "There is no summary yet: read the journal from the start (`dura journal --after 0`), then write one with `dura summary put` without --version.";
+        return `There is no summary yet: read the journal from the start a page at a time (\`dura journal --after 0 --limit ${RESUME.page} --max-chars ${RESUME.maxChars}\`), ` +
+          "and write the summary with `dura summary put --covered <last seq read>` (no --version the first time) as you go. See `dura guide`, Reading.";
       case "not_found":
         return `Check the state id (${ctx.stateId}); \`dura list\` shows the states you can read.`;
     }
@@ -295,7 +296,10 @@ const OUTPUT: Partial<Record<OperationId, (r: { res: Response; text: string }, i
   getSummary: ({ res, text }, io, print) => {
     print(text);
     const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
-    io.stderr(`version: ${versionFromEtag(res.headers.get("ETag"))}, covers journal through #${covered} (read on with --after ${covered})\n`);
+    io.stderr(
+      `version: ${versionFromEtag(res.headers.get("ETag"))}, covers journal through #${covered} ` +
+        `(read on with --after ${covered} --limit ${RESUME.page} --max-chars ${RESUME.maxChars}; see \`dura guide\`, Reading)\n`,
+    );
   },
 };
 

@@ -64,21 +64,32 @@ S="$DURA_STATE"; AUTH="Authorization: Bearer $DURA_TOKEN"
    C=0  # 要約の X-Covered-Through-Seq（要約がなければ 0）
    ```
 
-   State を読む。要約・全セクション・`C` より後のジャーナルが 1 つの Markdown で返る。末尾の `Last journal seq: N` を覚えておく。
-   要約がそれより前の記録の代わりになるので、`C` 以前を読み直す必要はない。
+   State を読む。要約・全セクション・`C` より後のジャーナルの最初のページが 1 つの Markdown で返る。
+   要約が `C` までの記録の代わりになるので、`C` 以前を読み直す必要はない。
+   長い本文は `maxChars` で切られ、切ったことと全体の文字数が示される。
 
    ```bash
-   curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S?after=$C&limit=1000"
+   curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S?after=$C&limit=100&maxChars=2000"
    ```
 
-   ジャーナルは `after` より後の古い順に、1 回で最大 `limit` 件（既定 200、上限 1000）しか返らない。
-   返ってきた件数が `limit` と同じなら続きがあるので、`Last journal seq` を `after` に渡して、件数が `limit` 未満になるまで読み進める。
-   古い記録まですべて読む必要はない。直近のものを優先して把握する。
+   末尾に `Last journal seq: N` が出る。そこに「`are not shown and have not been read`」（N より後に未読がある）とあれば、
+   その N を `after` に渡して、この文言が出なくなるまで読み進める。
+   **`C` より後の記録はすべて読んでから**作業を選ぶ（直近のページだけでは、途中の決定や人間への質問を見落とす）。
 
    ```bash
-   N=1000  # 直前に読んだ Last journal seq
-   curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S/journal?after=$N&limit=1000"
+   N=100  # 直前に読んだページの Last journal seq
+   curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S/journal?after=$N&limit=100&maxChars=2000"
    ```
+
+   - 新しいセッションは、必ず要約の `C`（要約がなければ 0）から読み始める。前のセッションで覚えた seq から始めない（そのセッションの文脈は残っておらず、引き継げるのは要約だけ）。
+   - 未読が 1 ページに収まらないとき、または要約がまだないとき（既存の State の初回移行）は、下の「未読が多いとき・要約がないとき」の手順で、ページごとに要約へ反映しながら読む。
+   - `C` より前の経緯（決定の理由、過去の報告）が必要になったら、検索するか、`before` でさかのぼる（`before` はその seq を含まないので、`C` までを見るなら `C+1` を渡す）。検索は未読を読む代わりにはならない。
+
+     ```bash
+     curl -sS -G -H "$AUTH" -H "Accept: text/markdown" --data-urlencode "q=SQLite" -d kind=decision -d maxChars=500 \
+       "$DURA_URL/api/states/$S/journal/search"
+     curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S/journal?before=$((C+1))&limit=20&maxChars=500"
+     ```
 
    `404` なら State がまだない。ユーザーに確認したうえで作る。`TITLE` には作業名を、`GOAL` には完了条件を、ユーザーと決めた内容で入れる。
 
@@ -146,7 +157,7 @@ curl -sS -X PUT -H "$AUTH" -H "Content-Type: text/markdown" -H 'If-Match: 3' \
 
 ### 再開用の要約を更新する
 
-ジャーナルが長くなったら（目安: 要約の後に 20 件以上たまったら）、オーケストレーターが要約を書き直します。
+要約の後に記録がたまったら（目安: 20 件以上）、オーケストレーターが要約を書き直します。
 現在の状況、重要な決定、未解決の事項、次にやることを書き、`coveredThroughSeq` には**実際に読んで反映した最後の seq** を入れます。
 要約を書いている間に追記された記録まで反映済みにしないでください（次のセッションが読み飛ばしてしまいます）。
 `If-Match` には読んだときの要約の version を入れます（新規作成のときだけ省略）。
@@ -156,6 +167,23 @@ jq -n --rawfile content summary.md --argjson seq 41 '{content:$content, coveredT
   curl -sS -X PUT -H "$AUTH" -H "Content-Type: application/json" -H 'If-Match: 3' \
     --data-binary @- "$DURA_URL/api/states/$S/summary"
 ```
+
+### 未読が多いとき・要約がないとき
+
+要約がまだない既存の State や、要約が古く未読が 1 ページ（100 件）を超える State では、一度に全部を読まず、ページごとに要約へ反映します。
+途中でセッションが終わっても、次のセッションは要約から再開でき、読んだ分を読み直さずに済みます。
+
+1. 上の手順で 1 ページ読む。
+2. オーケストレーター（または単独で作業するとき）は、ここまでに読んだ内容で要約を書く。前の要約のうち今も有効な内容は残す。`coveredThroughSeq` にはそのページの `Last journal seq` を入れる（初めて作るときは `If-Match` なし）。
+3. 次のページへ進み、未読がなくなるまで繰り返す。
+
+`maxChars` で切られた記録は、見えた部分までしか読んでいない。決定・質問・結果など、続きが要約に関わりそうなら、要約に含める前に全文を読む。
+
+```bash
+curl -sS -H "$AUTH" -H "Accept: text/markdown" "$DURA_URL/api/states/$S/journal/37"
+```
+
+サブエージェントは、タスクに必要な分だけ読み、要約は書かない。
 
 ### status を変える
 
@@ -176,8 +204,8 @@ curl -sS -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
 | やること | dura CLI |
 | --- | --- |
 | 使い方の正本を読む（トークン不要） | `dura guide` |
-| State を読む | `dura show --after $C --limit 1000`（`$C` は要約の反映済みの seq、なければ 0） |
-| ジャーナルの続きを読む | `dura journal --after $N --limit 1000` |
+| State を読む | `dura show --after $C --limit 100 --max-chars 2000`（`$C` は要約の反映済みの seq、なければ 0） |
+| ジャーナルの続きを読む（未読がなくなるまで） | `dura journal --after $N --limit 100 --max-chars 2000` |
 | 直近のジャーナルから過去へさかのぼる | `dura journal --before 1000000000 --limit 20`（続きは出力の `before=X`。長い本文は `--max-chars 500` で切る） |
 | ジャーナル 1 件の全文を読む | `dura journal 37` |
 | 過去のジャーナルを検索する（新しい順） | `dura search SQLite --kind decision`（キーワードはすべて含むもの。続きは出力の `before`） |
@@ -196,7 +224,7 @@ curl -sS -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
 
 ```bash
 dura summary get   # 要約がなければ summary_not_found。反映済みの seq を C とする
-dura show --after $C --limit 1000
+dura show --after $C --limit 100 --max-chars 2000   # 末尾に未読ありと出たら dura journal --after <N> で続きを読む
 dura log --kind report <<'EOF'
 CI を追加した（#3）。typecheck と test が PR で走る。
 次: CLI の設定まわり。
@@ -223,7 +251,7 @@ dura は `POST $DURA_URL/mcp` で MCP サーバー（Streamable HTTP）を提供
 | `get_guide` | `dura guide` | なし |
 | `list_states` | `dura list` | `status` |
 | `create_state` | `dura create` | `title`, `id`, `status`, `note`, `sections`（ユーザーに確認してから） |
-| `show_state` | `dura show` | `state`, `after`, `limit` |
+| `show_state` | `dura show` | `state`, `after`, `limit`, `maxChars` |
 | `read_journal` | `dura journal` | `state`, `after` か `before`, `limit`, `maxChars` |
 | `get_journal_entry` | `dura journal <seq>` | `state`, `seq` |
 | `search_journal` | `dura search` | `state`, `q`, `kind`, `before`, `limit`, `maxChars` |

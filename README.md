@@ -50,6 +50,7 @@ POST    /mcp                                          MCP（Streamable HTTP、�
 - 要約の `coveredThroughSeq` は、書き手が実際に読んで反映した最後の seq です。サーバーが進めることはなく、最新の seq を超える値は `422 seq_out_of_range` になります。要約を書いている間に追記された記録は、次のセッションで未読として読まれます。
 - `replace` は Claude Code や Codex の編集ツールと同じ old/new 方式です。`old` が 1 回だけ現れることを要求し、すべて置換したいときは `replaceAll: true` を付けます。
 - セクションや本文は `Content-Type: text/markdown` の生の本文でも、JSON でも送れます。
+- 引数は `src/ops/spec.ts` の定義に沿って検証し、外れた値は `400 bad_request` になります（例: `?status=` に未知の値、`limit=0`、`/journal/0`、型の違う JSON の値）。`If-Match` が必須の書き込みでは、本文より先に `If-Match` を確かめ、ないときは `428 precondition_required` を返します。
 
 エージェントには公開エンドポイント `GET /api/guide` を読ませれば、CLI と REST API の使い方が伝わります。たとえば `~/.claude/CLAUDE.md` や `~/.codex/AGENTS.md` に次のように書いておく運用を想定しています。
 

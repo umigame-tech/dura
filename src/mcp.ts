@@ -3,7 +3,8 @@ import { version as VERSION } from "../package.json";
 import { publicOrigin, resolveActor } from "./auth";
 import type { AppEnv } from "./env";
 import { ApiError } from "./lib/errors";
-import { argOf, fillPath, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "./ops/spec";
+import { versionFromEtag, writtenMessage } from "./ops/messages";
+import { argOf, fillPath, hasType, ifMatchHeader, jsonBody, operations, queryString, typeName, type Operation, type OperationId, type Param } from "./ops/spec";
 
 /**
  * MCP (Streamable HTTP) adapter. Stateless and JSON-only: every tool call is translated into a
@@ -122,7 +123,7 @@ function schemaOf(op: Operation): Json {
     if (p.enum) prop.enum = p.enum;
     if (p.type === "integer") prop.minimum = p.minimum ?? 0;
     if (p.maximum !== undefined) prop.maximum = p.maximum;
-    prop.description = p.mcp?.description ?? p.description;
+    prop.description = p.description;
     properties[argOf(p)] = prop;
   }
   const required = op.params.filter((p) => exposed(p) && requiredFor(p)).map(argOf);
@@ -134,23 +135,10 @@ function inputOf(op: Operation, args: Json): Json {
   const input: Json = {};
   for (const p of op.params.filter(exposed)) {
     const key = argOf(p);
-    let v = args[key];
-    if (v === null && !p.nullable) v = undefined;
-    if (v !== undefined && v !== null) {
-      const ok =
-        p.type === "string"
-          ? typeof v === "string"
-          : p.type === "integer"
-            ? typeof v === "number" && Number.isInteger(v) && v >= 0
-            : p.type === "boolean"
-              ? typeof v === "boolean"
-              : typeof v === "object" && !Array.isArray(v);
-      if (!ok) {
-        const what = { string: "a string", integer: "a non-negative integer", boolean: "a boolean", record: "an object of strings" }[p.type];
-        throw new ToolError(`${key} must be ${what}.`);
-      }
-      if (typeof v === "string" && p.omitBlank && !v.trim()) v = undefined;
-    }
+    // null means "not given", as before the spec; clearing a value over MCP is not offered.
+    let v = args[key] === null ? undefined : args[key];
+    if (v !== undefined && !hasType(p, v)) throw new ToolError(`${key} must be ${typeName({ ...p, nullable: false })}.`);
+    if (typeof v === "string" && p.omitBlank && !v.trim()) v = undefined;
     if (typeof v === "string") {
       if (p.enum && !p.enum.includes(v)) throw new ToolError(`${key} must be one of ${p.enum.join(", ")}.`);
       if (p.nonBlank && !v.trim()) throw new ToolError(`${key} is empty.`);
@@ -168,39 +156,15 @@ function inputOf(op: Operation, args: Json): Json {
   return input;
 }
 
-function writtenSummary(text: string) {
-  const { summary } = JSON.parse(text) as { summary: { version: number; coveredThroughSeq: number } };
-  return `Wrote the journal summary (version ${summary.version}, covers the journal through #${summary.coveredThroughSeq}).`;
-}
-
-function written(text: string) {
-  const { section } = JSON.parse(text) as { section: { name: string; version: number } };
-  return `Wrote section ${section.name} (version ${section.version}).`;
-}
-
-const versionOf = (res: Response) => /(\d+)/.exec(res.headers.get("ETag") ?? "")?.[1] ?? "?";
-
-/** How a tool turns a successful response into its text, where the plain body is not the best answer. */
-const OUTPUT: Partial<Record<OperationId, (res: Response, text: string, input: Json) => string>> = {
-  getSection: (res, text) => `<!-- version: ${versionOf(res)} -->\n\n${text}`,
+/** How a tool shows a read whose headers matter. Writes are reported by writtenMessage. */
+const OUTPUT: Partial<Record<OperationId, (res: Response, text: string) => string>> = {
+  getSection: (res, text) => `<!-- version: ${versionFromEtag(res.headers.get("ETag"))} -->\n\n${text}`,
   getSummary: (res, text) => {
     const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
-    return `<!-- version: ${versionOf(res)}, covers journal through #${covered}; read the journal with after=${covered} -->\n\n${text}`;
-  },
-  putSection: (_res, text) => written(text),
-  replaceInSection: (_res, text) => written(text),
-  putSummary: (_res, text) => writtenSummary(text),
-  appendJournal: (_res, text) => {
-    const { entry } = JSON.parse(text) as { entry: { seq: number; kind: string } };
-    return `Appended ${entry.kind} #${entry.seq}.`;
-  },
-  updateState: (_res, text) => {
-    const { state } = JSON.parse(text) as { state: { id: string; status: string } };
-    return `Status of ${state.id} is now ${state.status}.`;
+    return `<!-- version: ${versionFromEtag(res.headers.get("ETag"))}, covers journal through #${covered}; read the journal with after=${covered} -->\n\n${text}`;
   },
 };
 
-const SUMMARY_OPS: OperationId[] = ["getSummary", "putSummary", "listSummaryRevisions"];
 
 const TOOLS: Tool[] = operations().flatMap(([id, op]): Tool[] => {
   if ("skip" in op.mcp) return [];
@@ -211,13 +175,11 @@ const TOOLS: Tool[] = operations().flatMap(([id, op]): Tool[] => {
       inputSchema: schemaOf(op),
       call: async (args, api) => {
         const input = inputOf(op, args);
-        const headers: Record<string, string> = op.markdown === "no" ? {} : { ...MD };
         const body = jsonBody(op, input);
-        if (body !== undefined) Object.assign(headers, JSON_BODY);
-        if (input.version !== undefined && op.params.some((p) => p.in === "ifMatch")) headers["If-Match"] = String(input.version);
+        const headers = { ...(op.markdown === "no" ? {} : MD), ...(body !== undefined ? JSON_BODY : {}), ...ifMatchHeader(op, input) };
         const res = await api(op.method, `${fillPath(op, input as Record<string, string | number>)}${queryString(op, input)}`, { body, headers });
-        const text = await ok(res, args, SUMMARY_OPS.includes(id) ? "summary" : "section");
-        return OUTPUT[id]?.(res, text, input) ?? text;
+        const text = await ok(res, args, op.path.includes("/summary") ? "summary" : "section");
+        return OUTPUT[id]?.(res, text) ?? writtenMessage(id, text) ?? text;
       },
     },
   ];

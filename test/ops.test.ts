@@ -120,7 +120,42 @@ describe("one spec for the API, the CLI and MCP", () => {
     }
   });
 
-  it("keeps the spec free of imports, so the CLI bundle does not pull in server code", () => {
-    expect(read("src/ops/spec.ts")).not.toMatch(/^\s*import\s/m);
+  it("reads the request only through the spec in the API handlers", () => {
+    // Handlers get their params from the spec (reading an undeclared one throws, see declaredOnly).
+    // Reading the request directly would add a param the CLI and MCP never learn about.
+    const reads = [...read("src/routes/api.ts").matchAll(/c\.req\.\w+\([^)]*\)/g)].map((m) => m[0]);
+    expect(new Set(reads)).toEqual(new Set(['c.req.header("Accept")', 'c.req.query("format")']));
+    for (const [id, op] of operations()) {
+      if (op.auth === "read" || op.auth === "write") expect(op.path, `${id} checks access to the state in its path`).toMatch(/^\/states\/:id(\/|$)/);
+    }
+  });
+
+  it("names only commands and tools that exist, in the docs, hints and instructions", () => {
+    const commands = operations().flatMap(([, op]) => ("command" in op.cli ? [op.cli.command] : []));
+    const tools = new Set(operations().flatMap(([, op]) => ("tool" in op.mcp ? [op.mcp.tool] : [])));
+    const files = ["README.md", "cli/README.md", ".agents/skills/dura/SKILL.md", "src/guide.ts", "src/mcp.ts", "cli/src/cli.ts"];
+    for (const file of files) {
+      const text = read(file);
+      // Inline code, fenced code blocks and indented code: where a command is shown, not prose.
+      let fenced = false;
+      const snippets = text.split("\n").flatMap((line) => {
+        if (/^\s*```/.test(line)) fenced = !fenced;
+        const inline = [...line.matchAll(/`([^`\n]+)`/g)].map((m) => m[1]!);
+        return fenced || /^ {4}/.test(line) ? [line, ...inline] : inline;
+      });
+      for (const snippet of snippets) {
+        for (const m of snippet.matchAll(/(?:^|[\s(|&;])dura ([a-z]+(?: [a-z]+)*)(?=$|[\s"'`)|&;\\])/g)) {
+          const words = m[1]!;
+          expect(commands.some((c) => words === c || words.startsWith(`${c} `)), `${file}: dura ${words}`).toBe(true);
+        }
+      }
+      for (const m of text.matchAll(/\b(?:list|show|read|get|search|put|replace|append|set)_[a-z_]+\b/g)) {
+        expect(tools.has(m[0]), `${file}: ${m[0]}`).toBe(true);
+      }
+    }
+  });
+
+  it("keeps the shared files free of imports, so the CLI bundle does not pull in server code", () => {
+    for (const file of ["src/ops/spec.ts", "src/ops/messages.ts"]) expect(read(file), file).not.toMatch(/^\s*import\s/m);
   });
 });

@@ -6,6 +6,7 @@ import { guideMarkdown } from "../guide";
 import { ApiError, badRequest } from "../lib/errors";
 import { notifyStatusChange } from "../notify";
 import { registerOperations, type Handlers, type Input } from "../ops/http";
+import { OPERATIONS } from "../ops/spec";
 import {
   appendJournal,
   createState,
@@ -279,7 +280,7 @@ const handlers: Handlers = {
     if (q !== undefined && [...q].length > SEARCH_MAX_QUERY) throw badRequest(`q must be at most ${SEARCH_MAX_QUERY} characters.`);
     const terms = q !== undefined ? searchTerms(q) : [];
     // q = '""' has no terms, so it would match everything like an empty q.
-    if (terms.length === 0 && kind === undefined) throw badRequest("Pass q (keywords) and/or kind to search the journal.");
+    if (terms.length === 0 && kind === undefined) throw badRequest(OPERATIONS.searchJournal.anyOfMessage);
     if (terms.length > SEARCH_MAX_TERMS) throw badRequest(`q may have at most ${SEARCH_MAX_TERMS} terms.`);
     await getState(db, id);
     const { entries, nextBefore } = await searchJournal(db, id, { terms, kind, before, limit: optInt(input, "limit") });

@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import { assertRead, assertWrite, requireActor, type Actor } from "../auth";
 import type { AppEnv } from "../env";
 import { ApiError, badRequest } from "../lib/errors";
-import { operations, type Operation, type OperationId, type Param } from "./spec";
+import { hasType, operations, typeName, type Operation, type OperationId, type Param } from "./spec";
 
 /** The parsed input of an operation: every param that was given (or has a default), by its HTTP name. */
 export type Input = Record<string, unknown>;
@@ -26,9 +26,23 @@ export function registerOperations(app: Hono<AppEnv>, handlers: Handlers) {
     app.on(op.method, honoPath(op), async (c) => {
       const actor = authorize(c, op);
       const input = await parseInput(c, op);
-      return handler(c, input, actor as Actor);
+      return handler(c, declaredOnly(op, input), actor as Actor);
     });
   }
+}
+
+/**
+ * Lets a handler read only the params of its operation, so a param cannot be used by the API
+ * without being in the spec (and so in the CLI and MCP). Reading any other key throws.
+ */
+function declaredOnly(op: Operation, input: Input): Input {
+  const names = new Set(op.params.map((p) => p.name));
+  return new Proxy(input, {
+    get(target, key) {
+      if (typeof key === "string" && !names.has(key)) throw new Error(`Param "${key}" is not in the spec of ${op.method} ${op.path}.`);
+      return Reflect.get(target, key);
+    },
+  });
 }
 
 function authorize(c: Context<AppEnv>, op: Operation): Actor | undefined {
@@ -40,7 +54,7 @@ function authorize(c: Context<AppEnv>, op: Operation): Actor | undefined {
   return actor;
 }
 
-export function intParam(value: string | undefined, name: string): number | undefined {
+function intParam(value: string | undefined, name: string): number | undefined {
   if (value === undefined || value === "") return undefined;
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
     throw badRequest(`${name} must be a non-negative integer.`);
@@ -69,32 +83,24 @@ async function jsonObject(c: Context<AppEnv>): Promise<Record<string, unknown>> 
   return v as Record<string, unknown>;
 }
 
-const TYPE_NAMES = { string: "a string", integer: "a non-negative integer", boolean: "a boolean", record: "an object of strings" };
-
 /** Checks a JSON value against its param. */
 function fromJson(p: Param, v: unknown): unknown {
   if (v === undefined) return undefined;
   if (v === null && p.nullable) return null;
-  const ok =
-    p.type === "string"
-      ? typeof v === "string"
-      : p.type === "integer"
-        ? typeof v === "number" && Number.isSafeInteger(v) && v >= 0
-        : p.type === "boolean"
-          ? typeof v === "boolean"
-          : typeof v === "object" && v !== null && !Array.isArray(v);
-  if (!ok) throw badRequest(`${p.name} must be ${TYPE_NAMES[p.type]}${p.nullable ? " or null" : ""}.`);
-  if (p.type === "record") {
-    for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
-      if (typeof x !== "string") throw badRequest(`${p.name}.${k} must be a string.`);
+  if (!hasType(p, v)) {
+    if (p.type === "record" && typeof v === "object" && v !== null && !Array.isArray(v)) {
+      const key = Object.keys(v).find((k) => typeof (v as Record<string, unknown>)[k] !== "string");
+      throw badRequest(`${p.name}.${key} must be a string.`);
     }
+    throw badRequest(`${p.name} must be ${typeName(p)}.`);
   }
   return v;
 }
 
-/** Converts a path or query string to its param's type. */
+/** Converts a path or query string to its param's type. An empty number means none; an empty string stays "". */
 function fromString(p: Param, v: string | undefined): unknown {
-  if (v === undefined || v === "") return undefined;
+  if (v === undefined) return undefined;
+  if (v === "" && p.type !== "string") return undefined;
   if (p.type === "integer") return intParam(v, p.name);
   if (p.type === "boolean") {
     if (v !== "true" && v !== "false") throw badRequest(`${p.name} must be true or false.`);
@@ -105,6 +111,11 @@ function fromString(p: Param, v: string | undefined): unknown {
 
 export async function parseInput(c: Context<AppEnv>, op: Operation): Promise<Input> {
   const input: Input = {};
+  // The version first: a write without If-Match is told so (428) before anything about its body.
+  const version = op.params.find((p) => p.in === "ifMatch");
+  if (version?.required && c.req.header("If-Match") === undefined) {
+    throw new ApiError(428, "precondition_required", `${op.method} ${op.path} requires If-Match: <the version you read>.`);
+  }
   const bodyParams = op.params.filter((p) => p.in === "body");
   let json: Record<string, unknown> | undefined;
   if (bodyParams.length > 0) {
@@ -129,17 +140,15 @@ export async function parseInput(c: Context<AppEnv>, op: Operation): Promise<Inp
     }
     if (typeof v === "number" && p.minimum !== undefined && v < p.minimum) throw badRequest(`${p.name} must be at least ${p.minimum}.`);
     if (v === undefined && p.default !== undefined) v = p.default;
-    if (v === undefined && p.required) {
-      if (p.in === "ifMatch") {
-        throw new ApiError(428, "precondition_required", "This request requires If-Match: <the version you read>.");
-      }
-      throw badRequest(`${p.name} is required and must be ${TYPE_NAMES[p.type]}.`);
-    }
+    if (v === undefined && p.required) throw badRequest(`${p.name} is required and must be ${typeName(p)} (${p.description}).`);
     input[p.name] = v;
   }
 
   if (op.exclusive && op.exclusive.filter((n) => input[n] !== undefined).length > 1) {
     throw badRequest(`Pass either ${op.exclusive.join(" or ")}, not both.`);
+  }
+  if (op.anyOf && op.anyOf.every((n) => input[n] === undefined)) {
+    throw badRequest(op.anyOfMessage ?? `Pass at least one of ${op.anyOf.join(", ")}.`);
   }
   return input;
 }

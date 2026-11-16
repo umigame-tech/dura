@@ -8,6 +8,10 @@
 
 export const STATUSES = ["active", "waiting", "completed", "abandoned"] as const;
 
+/** Page sizes of the journal. The store applies them; the spec tells clients. */
+export const JOURNAL_LIMIT = { default: 200, max: 1000 } as const;
+export const SEARCH_LIMIT = { default: 20, max: 100 } as const;
+
 export type ParamType = "string" | "integer" | "boolean" | "record";
 
 export interface CliParam {
@@ -36,8 +40,6 @@ export interface McpParam {
   readonly name?: string;
   /** Overrides `required` for MCP. */
   readonly required?: boolean;
-  /** Overrides the description for MCP. */
-  readonly description?: string;
   /** Not offered by MCP yet, with the reason. */
   readonly skip?: string;
 }
@@ -81,8 +83,10 @@ export interface Operation {
   readonly rawBody?: string;
   /** At most one of these params may be given. */
   readonly exclusive?: readonly string[];
-  /** At least one of these params must be given. Clients check it before sending; the handler checks it on the parsed value. */
+  /** At least one of these params must be given. */
   readonly anyOf?: readonly string[];
+  /** The server's message when none of `anyOf` is given. */
+  readonly anyOfMessage?: string;
   readonly cli: { readonly command: string; readonly summary: string } | { readonly skip: string };
   readonly mcp: { readonly tool: string; readonly description: string } | { readonly skip: string };
 }
@@ -127,8 +131,8 @@ const limit = {
   type: "integer",
   in: "query",
   minimum: 1,
-  maximum: 1000,
-  description: "At most this many journal entries (default 200)",
+  maximum: JOURNAL_LIMIT.max,
+  description: `At most this many journal entries (default ${JOURNAL_LIMIT.default})`,
   cli: { label: "<n>", help: "at most n entries" },
 } as const satisfies Param;
 
@@ -183,6 +187,7 @@ export const OPERATIONS = {
         type: "string",
         in: "query",
         enum: STATUSES,
+        omitBlank: true,
         description: "Only states with this status",
         cli: { label: "<status>", help: "only states with this status" },
       },
@@ -274,10 +279,11 @@ export const OPERATIONS = {
         cli: { label: "<kind>", help: "only entries of this kind" },
       },
       { ...before, description: "Only matches with seq below this (the next page)" },
-      { ...limit, maximum: 100, description: "At most this many matches (default 20)" },
+      { ...limit, maximum: SEARCH_LIMIT.max, description: `At most this many matches (default ${SEARCH_LIMIT.default})` },
       maxChars,
     ],
     anyOf: ["q", "kind"],
+    anyOfMessage: "Pass q (keywords) and/or kind to search the journal.",
     cli: { command: "search", summary: "Search the journal, newest first (every keyword must occur; --kind filters)" },
     mcp: {
       tool: "search_journal",
@@ -493,6 +499,31 @@ export function queryString(op: Operation, values: Record<string, unknown>): str
     .filter((p) => p.in === "query" && values[p.name] !== undefined)
     .map((p) => [p.name, String(values[p.name])] as [string, string]);
   return pairs.length ? `?${new URLSearchParams(pairs)}` : "";
+}
+
+const TYPE_NAMES = { string: "a string", integer: "a non-negative integer", boolean: "a boolean", record: "an object of strings" };
+
+/** "a string", "a non-negative integer or null", ... */
+export const typeName = (p: Param) => `${TYPE_NAMES[p.type]}${p.nullable ? " or null" : ""}`;
+
+/** Whether a JSON value has the param's type (null is checked by the caller). */
+export function hasType(p: Param, v: unknown): boolean {
+  switch (p.type) {
+    case "string":
+      return typeof v === "string";
+    case "integer":
+      return typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+    case "boolean":
+      return typeof v === "boolean";
+    case "record":
+      return typeof v === "object" && v !== null && !Array.isArray(v) && Object.values(v).every((x) => typeof x === "string");
+  }
+}
+
+/** The If-Match header for the version param, if one was given. */
+export function ifMatchHeader(op: Operation, values: Record<string, unknown>): Record<string, string> {
+  const p = op.params.find((x) => x.in === "ifMatch");
+  return p && values[p.name] !== undefined ? { "If-Match": String(values[p.name]) } : {};
 }
 
 /** The JSON body of the given params, or undefined when the operation has none. */

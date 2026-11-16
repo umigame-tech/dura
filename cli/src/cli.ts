@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import { version } from "../package.json";
-import { fillPath, flagOf, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "../../src/ops/spec";
+import { versionFromEtag, writtenMessage } from "../../src/ops/messages";
+import { fillPath, flagOf, ifMatchHeader, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "../../src/ops/spec";
 
 /** Everything the CLI touches outside itself, so tests can run it against an in-process app. */
 export interface Io {
@@ -39,12 +40,6 @@ export function loadConfig(env: Io["env"], opts: { url?: string; token?: string;
   const source = opts.url !== undefined ? "--url" : "DURA_URL";
   if (!/^https?:\/\//.test(url!)) throw new CliError(`${source} must start with http:// or https:// (got ${url}).`);
   return { url: url!.replace(/\/+$/, ""), token };
-}
-
-function intOption(value: string | undefined, name: string): number | undefined {
-  if (value === undefined) return undefined;
-  if (!/^\d+$/.test(value)) throw new CliError(`--${name} must be a non-negative integer.`);
-  return Number(value);
 }
 
 interface ApiErrorBody {
@@ -100,8 +95,8 @@ function parseError(status: number, text: string): ApiErrorBody {
 }
 
 /** What to do next, phrased for the CLI instead of raw HTTP. */
-function hint(err: ResponseError, ctx: { command: string; name?: string; stateId?: string }): string | undefined {
-  if (ctx.command === "summary") {
+function hint(err: ResponseError, ctx: { summary?: boolean; name?: string; stateId?: string }): string | undefined {
+  if (ctx.summary) {
     switch (err.body.code) {
       case "version_conflict":
         return (
@@ -148,6 +143,8 @@ const MD = { Accept: "text/markdown" };
 interface Command {
   id: OperationId;
   op: Operation;
+  /** The command words, e.g. "section get". */
+  name: string;
   words: string[];
   params: Param[];
   positionals: Param[];
@@ -168,6 +165,7 @@ const COMMANDS: Command[] = operations().flatMap(([id, op]): Command[] => {
     {
       id,
       op,
+      name: op.cli.command,
       words: op.cli.command.split(" "),
       params,
       positionals,
@@ -204,7 +202,7 @@ function optionHelp(): string {
     for (const p of cmd.flags) {
       const flag = flagOf(p);
       const entry = byFlag.get(flag) ?? { label: p.type === "boolean" ? "" : ` ${labelOf(p)}`, uses: [] };
-      entry.uses.push({ command: cmd.usage.split(" <")[0]!.split(" [")[0]!, help: p.cli?.help ?? p.description });
+      entry.uses.push({ command: cmd.name, help: p.cli?.help ?? p.description });
       byFlag.set(flag, entry);
     }
   }
@@ -216,7 +214,7 @@ function optionHelp(): string {
     const desc = [...groups].map(([help, cmds]) => `${[...new Set(cmds)].join(" / ")}: ${help}`).join("; ");
     text += line(`    --${flag}${label}`, desc);
   }
-  const fileCommands = COMMANDS.filter((c) => c.stdin).map((c) => c.op.cli && "command" in c.op.cli ? c.op.cli.command : "");
+  const fileCommands = COMMANDS.filter((c) => c.stdin).map((c) => c.name);
   text += line("    --file <path>", `${fileCommands.join(" / ")}: read the body from a file`);
   return text;
 }
@@ -288,39 +286,18 @@ function convert(p: Param, raw: string): string | number {
   return raw;
 }
 
-/** How a command prints a successful response, where the plain body is not the best answer (never with --json). */
+/** How a command shows a read whose headers matter (never with --json). Writes are reported by writtenMessage. */
 const OUTPUT: Partial<Record<OperationId, (r: { res: Response; text: string }, io: Io, print: (text: string) => void) => void>> = {
   getSection: ({ res, text }, io) => {
     io.stdout(text);
-    io.stderr(`version: ${versionOf(res)}\n`);
+    io.stderr(`version: ${versionFromEtag(res.headers.get("ETag"))}\n`);
   },
   getSummary: ({ res, text }, io, print) => {
     print(text);
     const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
-    io.stderr(`version: ${versionOf(res)}, covers journal through #${covered} (read on with --after ${covered})\n`);
-  },
-  putSection: ({ text }, io) => io.stderr(writtenSection(text)),
-  replaceInSection: ({ text }, io) => io.stderr(writtenSection(text)),
-  putSummary: ({ text }, io) => {
-    const s = (JSON.parse(text) as { summary: { version: number; coveredThroughSeq: number } }).summary;
-    io.stderr(`Wrote the journal summary (version ${s.version}, covers the journal through #${s.coveredThroughSeq}).\n`);
-  },
-  appendJournal: ({ text }, io) => {
-    const { entry } = JSON.parse(text) as { entry: { seq: number; kind: string } };
-    io.stderr(`Appended ${entry.kind} #${entry.seq}.\n`);
-  },
-  updateState: ({ text }, io) => {
-    const { state } = JSON.parse(text) as { state: { id: string; status: string } };
-    io.stderr(`Status of ${state.id} is now ${state.status}.\n`);
+    io.stderr(`version: ${versionFromEtag(res.headers.get("ETag"))}, covers journal through #${covered} (read on with --after ${covered})\n`);
   },
 };
-
-const versionOf = (res: Response) => /(\d+)/.exec(res.headers.get("ETag") ?? "")?.[1] ?? "?";
-
-function writtenSection(text: string) {
-  const s = (JSON.parse(text) as { section: { name: string; version: number } }).section;
-  return `Wrote section ${s.name} (version ${s.version}).\n`;
-}
 
 export async function run(argv: string[], io: Io): Promise<number> {
   let parsed;
@@ -342,16 +319,17 @@ export async function run(argv: string[], io: Io): Promise<number> {
     return positionals.length > 0 || opts.help ? 0 : 2;
   }
 
-  const ctx: { command: string; name?: string; stateId?: string } = { command: positionals[0]! };
+  const ctx: { summary?: boolean; name?: string; stateId?: string } = {};
   const str = (key: string) => opts[key] as string | undefined;
   try {
     const { cmd, args } = resolve(positionals);
     const { op } = cmd;
+    ctx.summary = op.path.includes("/summary");
     const given = Object.keys(opts).filter((k) => opts[k] !== undefined && !(k in GLOBAL_OPTIONS));
     const unknown = given.find((k) => !cmd.flags.some((p) => flagOf(p) === k));
     if (unknown) throw new CliError(`\`dura ${cmd.usage}\` does not take --${unknown}.`);
     if (str("file") !== undefined && !cmd.stdin) throw new CliError(`\`dura ${cmd.usage}\` does not take --file.`);
-    if (opts.json && op.markdown === "only") throw new CliError(`${cmd.words.join(" ")} is only available as Markdown; drop --json.`);
+    if (opts.json && op.markdown === "only") throw new CliError(`${cmd.name} is only available as Markdown; drop --json.`);
 
     if (str("token-file") !== undefined && opts["token-stdin"]) {
       throw new CliError("Pass either --token-file or --token-stdin, not both.");
@@ -378,20 +356,21 @@ export async function run(argv: string[], io: Io): Promise<number> {
     };
 
     const values: Record<string, unknown> = {};
-    let positional = 0;
-    for (const p of cmd.params) {
+    // The body is read last, so a missing flag is reported before the CLI waits on stdin.
+    const ordered = [...cmd.params.filter((p) => !p.cli?.stdin), ...cmd.params.filter((p) => p.cli?.stdin)];
+    for (const p of ordered) {
       let v: unknown;
       if (p.cli?.state) {
         const id = (str("state") ?? io.env.DURA_STATE)?.trim();
         if (!id) throw new CliError("No state given. Pass --state <id> or set DURA_STATE.");
         v = ctx.stateId = id;
       } else if (p.cli?.positional === "rest") {
-        const words = args.slice(positional);
+        const words = args.slice(cmd.positionals.indexOf(p));
         // The shell already split the words; quote an argument with spaces so it stays one phrase.
         const joined = p.cli.join === "phrases" ? words.map((w) => (/\s/.test(w) && !w.includes('"') ? `"${w}"` : w)) : words;
         v = words.length > 0 ? joined.join(" ") : undefined;
       } else if (p.cli?.positional) {
-        const raw = args[positional++];
+        const raw = args[cmd.positionals.indexOf(p)];
         v = raw === undefined ? undefined : convert(p, raw);
       } else if (!p.cli?.stdin) {
         const raw = opts[flagOf(p)];
@@ -400,7 +379,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
       if (v === undefined && p.cli?.stdin) v = await body();
       if (typeof v === "string" && p.omitBlank && !v.trim()) v = undefined;
       if (typeof v === "string" && p.nonBlank && !v.trim()) throw new CliError(`${shown(p)} is empty. Pass it as an argument, with --file, or on stdin.`);
-      if (v === undefined && (p.cli?.required ?? p.required)) throw new CliError(`${cmd.words.join(" ")} needs ${shown(p)}${p.cli?.positional ? "" : ` ${labelOf(p)}`}.`);
+      if (v === undefined && (p.cli?.required ?? p.required)) throw new CliError(`${cmd.name} needs ${shown(p)}${p.cli?.positional ? "" : ` ${labelOf(p)}`}.`);
       if (v !== undefined) values[p.name] = v;
     }
     if (typeof values.name === "string") ctx.name = values.name;
@@ -410,17 +389,21 @@ export async function run(argv: string[], io: Io): Promise<number> {
     }
     if (op.anyOf && op.anyOf.every((n) => values[n] === undefined)) throw new CliError(`Pass ${names(op.anyOf).join(", ")}, or both.`);
 
-    const headers: Record<string, string> = op.markdown === "yes" && !opts.json ? { ...MD } : {};
     const payload = jsonBody(op, values);
-    if (payload !== undefined) headers["Content-Type"] = "application/json";
-    if (values.version !== undefined && op.params.some((p) => p.in === "ifMatch")) headers["If-Match"] = String(values.version);
+    const headers = {
+      ...(op.markdown === "yes" && !opts.json ? MD : {}),
+      ...(payload !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...ifMatchHeader(op, values),
+    };
     const res = await client.request(op.method, `${fillPath(op, values as Record<string, string | number>)}${queryString(op, values)}`, {
       body: payload,
       headers,
     });
     const print = (text: string) => io.stdout(text.endsWith("\n") ? text : `${text}\n`);
     const output = opts.json ? undefined : OUTPUT[cmd.id];
+    const written = opts.json ? undefined : writtenMessage(cmd.id, res.text);
     if (output) output(res, io, print);
+    else if (written) io.stderr(`${written}\n`);
     else print(res.text);
     return 0;
   } catch (err) {

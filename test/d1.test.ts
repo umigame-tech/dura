@@ -13,6 +13,7 @@ import {
   findState,
   findSummary,
   getJournalEntry,
+  journalFooter,
   lastJournalSeq,
   listJournal,
   listJournalBefore,
@@ -177,5 +178,7 @@ describe("atomic writes on D1", () => {
     await putSummary(db, "resume", { content: "through 50", coveredThroughSeq: 50 }, 1, "me");
     await appendJournal(db, "resume", "me", "report", "late");
     expect(seqs(await listJournal(db, "resume", { after: 50, limit: 25 }))).toEqual([51, 61, 11]);
+    // The page footer the routes build from these reads names the unread range on D1 as well.
+    expect(journalFooter(25, await lastJournalSeq(db, "resume"))).toContain("Entries after #25 (through #61) are not shown");
   }, 30_000);
 });

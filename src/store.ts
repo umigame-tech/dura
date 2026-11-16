@@ -439,10 +439,11 @@ function openFence(text: string): string | undefined {
   return open;
 }
 
-/** One journal entry as Markdown. With maxChars, a longer body is cut and the cut is stated with where to read it all. */
 /**
  * The end of a forward (after) page: the seq to continue from, and whether newer entries remain unread.
- * Without latestSeq the page cannot tell, so it only gives the seq.
+ * latestSeq is read alongside the page, so an entry appended in between can make it older than the page
+ * (then nothing newer is known) or newer (then the entry is reported unread): either way nothing is called read
+ * that was not shown. Without latestSeq the page cannot tell, so it only gives the seq.
  */
 export function journalFooter(last: number, latestSeq?: number): string {
   if (latestSeq !== undefined && latestSeq > last) {
@@ -451,9 +452,18 @@ export function journalFooter(last: number, latestSeq?: number): string {
       `Continue with after=${last}.`
     );
   }
-  return `Last journal seq: ${last}.${latestSeq === undefined ? "" : " No newer entries."} Entries appended later come after=${last}.`;
+  return `Last journal seq: ${last}.${latestSeq === undefined ? "" : " No newer entries."} Read entries appended later with after=${last}.`;
 }
 
+/** Said of an empty forward page whose `after` is past the newest entry, so that cursor is not kept. */
+export function beyondLatest(after: number, latestSeq: number): string {
+  return (
+    `after=${after} is beyond the latest journal entry (#${latestSeq}). ` +
+    `Entries appended later start at #${latestSeq + 1}, so continue with after=${latestSeq}.`
+  );
+}
+
+/** One journal entry as Markdown. With maxChars, a longer body is cut and the cut is stated with where to read it all. */
 export function journalEntryMarkdown(stateId: string, e: JournalEntry, maxChars?: number): string {
   // Counted on the stored body, like the JSON response, so both report the same totalChars.
   const x = excerpt(e.body, maxChars);
@@ -683,6 +693,7 @@ export function renderStateMarkdown(
   if (journal.length === 0) lines.push("_No entries._", "");
   for (const e of journal) lines.push(journalEntryMarkdown(state.id, e, maxChars), "");
   const last = journal.at(-1)?.seq ?? after;
-  lines.push("---", "", journalFooter(last, latestSeq), "");
+  const beyond = journal.length === 0 && latestSeq !== undefined && after > latestSeq;
+  lines.push("---", "", beyond ? beyondLatest(after, latestSeq) : journalFooter(last, latestSeq), "");
   return lines.join("\n");
 }

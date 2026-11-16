@@ -9,6 +9,7 @@ import { registerOperations, type Handlers, type Input } from "../ops/http";
 import { OPERATIONS } from "../ops/spec";
 import {
   appendJournal,
+  beyondLatest,
   createState,
   excerpt,
   findSummary,
@@ -76,7 +77,10 @@ function journalMarkdown(
   maxChars?: number,
 ) {
   if (entries.length === 0) {
-    return "after" in page ? `_No journal entries after #${page.after}._\n` : `_No journal entries before #${page.before}._\n`;
+    if (!("after" in page)) return `_No journal entries before #${page.before}._\n`;
+    return page.after > page.latestSeq
+      ? `_No journal entries after #${page.after}._ ${beyondLatest(page.after, page.latestSeq)}\n`
+      : `_No journal entries after #${page.after}._\n`;
   }
   const parts = entries.map((e) => `${journalEntryMarkdown(stateId, e, maxChars)}\n`);
   const last = entries.at(-1)!.seq;

@@ -100,7 +100,7 @@ function hint(err: ResponseError, ctx: { summary?: boolean; name?: string; state
     switch (err.body.code) {
       case "version_conflict":
         return (
-          "Run `dura summary get`, read the journal after its covered seq (`dura journal --after <seq>`), " +
+          `Run \`dura summary get\`, read the journal after its covered seq (\`dura journal --after <seq> --limit ${RESUME.page} --max-chars ${RESUME.maxChars}\`), ` +
           `merge your summary into it, and retry with --version ${err.body.currentVersion ?? "<new version>"}.`
         );
       case "precondition_required":
@@ -296,7 +296,10 @@ const OUTPUT: Partial<Record<OperationId, (r: { res: Response; text: string }, i
   getSummary: ({ res, text }, io, print) => {
     print(text);
     const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
-    io.stderr(`version: ${versionFromEtag(res.headers.get("ETag"))}, covers journal through #${covered} (read on with --after ${covered})\n`);
+    io.stderr(
+      `version: ${versionFromEtag(res.headers.get("ETag"))}, covers journal through #${covered} ` +
+        `(read on with --after ${covered} --limit ${RESUME.page} --max-chars ${RESUME.maxChars}; see \`dura guide\`, Reading)\n`,
+    );
   },
 };
 

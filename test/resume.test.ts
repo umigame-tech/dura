@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { run, type Io } from "../cli/src/cli";
 import { RESUME } from "../src/ops/spec";
+import { journalFooter } from "../src/store";
 import { setup } from "./helpers";
 
 // Walks through the resume procedure of /api/guide (Reading) on a long journal: summary first, then every entry
@@ -133,5 +134,22 @@ describe("resume procedure", () => {
     expect(guide).toContain("### Many unread entries, or no summary yet");
     expect(guide).toContain("not from a seq you remember from");
     expect(guide).toContain(UNREAD);
+  });
+  it("words the end of a page by whether newer entries are known, unread or past the cursor", async () => {
+    expect(journalFooter(5, 9)).toBe(
+      "Last journal seq: 5. Entries after #5 (through #9) are not shown and have not been read. Continue with after=5.",
+    );
+    expect(journalFooter(9, 9)).toBe("Last journal seq: 9. No newer entries. Read entries appended later with after=9.");
+    // An entry appended between reading the page and the latest seq leaves latestSeq behind the page.
+    expect(journalFooter(10, 9)).toBe("Last journal seq: 10. No newer entries. Read entries appended later with after=10.");
+    expect(journalFooter(5)).toBe("Last journal seq: 5. Read entries appended later with after=5.");
+
+    // A cursor past the newest entry would skip what is appended next, so the page says where to continue.
+    const { call, t, md } = await withLongJournal(3);
+    const beyond = "after=50 is beyond the latest journal entry (#3). Entries appended later start at #4, so continue with after=3.";
+    expect(await md("/api/states/s?after=50")).toContain(beyond);
+    expect(await md("/api/states/s/journal?after=50")).toContain(beyond);
+    expect(await md("/api/states/s/journal?after=3")).not.toContain("beyond");
+    expect((await (await call(t, "GET", "/api/states/s/journal?after=50")).json()).latestSeq).toBe(3);
   });
 });

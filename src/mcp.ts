@@ -3,6 +3,7 @@ import { version as VERSION } from "../package.json";
 import { publicOrigin, resolveActor } from "./auth";
 import type { AppEnv } from "./env";
 import { ApiError } from "./lib/errors";
+import { argOf, fillPath, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "./ops/spec";
 
 /**
  * MCP (Streamable HTTP) adapter. Stateless and JSON-only: every tool call is translated into a
@@ -11,7 +12,6 @@ import { ApiError } from "./lib/errors";
  */
 
 const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
-const STATUSES = ["active", "waiting", "completed", "abandoned"];
 
 const INSTRUCTIONS = `dura keeps the state of a long-running task outside of any single agent session.
 A state has overwritable, versioned Markdown sections (goal, plan, design, tasks...) and an append-only journal.
@@ -39,63 +39,7 @@ interface Tool {
 
 type Api = (method: string, path: string, init?: { body?: string; headers?: Record<string, string> }) => Promise<Response>;
 
-const stateArg = { type: "string", description: "State id" };
-const nameArg = { type: "string", description: "Section name, e.g. goal, plan, design, tasks" };
-const afterArg = {
-  type: "integer",
-  minimum: 0,
-  description: "Only journal entries after this seq (default 0). Omit it when you pass before",
-};
-const beforeArg = {
-  type: "integer",
-  minimum: 0,
-  description: "Only the newest journal entries before this seq (a large value gives the latest). Not with after",
-};
-const maxCharsArg = {
-  type: "integer",
-  minimum: 1,
-  description: "Cut journal bodies longer than this many characters; the cut is marked with the length and get_journal_entry reads the whole entry",
-};
-const limitArg = { type: "integer", minimum: 1, maximum: 1000, description: "At most this many journal entries (default 200)" };
-const versionArg = { type: "integer", minimum: 0, description: "The section version you read" };
-
-const object = (properties: Json, required: string[]) => ({ type: "object", properties, required, additionalProperties: false });
-
 class ToolError extends Error {}
-
-function str(args: Json, key: string, required: true): string;
-function str(args: Json, key: string, required?: false): string | undefined;
-function str(args: Json, key: string, required = false) {
-  const v = args[key];
-  if (v === undefined || v === null) {
-    if (required) throw new ToolError(`${key} is required.`);
-    return undefined;
-  }
-  if (typeof v !== "string") throw new ToolError(`${key} must be a string.`);
-  return v;
-}
-
-function int(args: Json, key: string): number | undefined {
-  const v = args[key];
-  if (v === undefined || v === null) return undefined;
-  if (typeof v !== "number" || !Number.isInteger(v) || v < 0) throw new ToolError(`${key} must be a non-negative integer.`);
-  return v;
-}
-
-function query(params: Record<string, string | number | undefined>): string {
-  const entries = Object.entries(params).filter((e): e is [string, string | number] => e[1] !== undefined);
-  return entries.length ? `?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)]))}` : "";
-}
-
-/** A path segment for the API. "." and ".." are rejected because the URL would normalize them away. */
-function segment(args: Json, key: string): string {
-  const v = str(args, key, true);
-  if (v === "." || v === "..") throw new ToolError(`${key} must not be "${v}".`);
-  return encodeURIComponent(v);
-}
-
-const state = (args: Json) => segment(args, "state");
-const sectionPath = (args: Json) => `/states/${state(args)}/sections/${segment(args, "name")}`;
 
 const MD = { Accept: "text/markdown" };
 const JSON_BODY = { "Content-Type": "application/json" };
@@ -167,220 +111,62 @@ function hint(code: string, args: Json, currentVersion?: number): string | undef
   return undefined;
 }
 
-const TOOLS: Tool[] = [
-  {
-    name: "list_states",
-    description: "List the states this token can read, with their status and status note.",
-    inputSchema: object({ status: { type: "string", enum: STATUSES, description: "Only states with this status" } }, []),
-    call: async (args, api) => ok(await api("GET", `/states${query({ status: str(args, "status") })}`, { headers: MD }), args),
-  },
-  {
-    name: "show_state",
-    description:
-      "Read a state as Markdown: status, every section with its version, and journal entries after `after` (oldest first). The output ends with the last journal seq; pass it as `after` next time.",
-    inputSchema: object({ state: stateArg, after: afterArg, limit: limitArg, maxChars: maxCharsArg }, ["state"]),
-    call: async (args, api) => {
-      const q = query({ after: int(args, "after"), limit: int(args, "limit"), maxChars: int(args, "maxChars") });
-      return ok(await api("GET", `/states/${state(args)}${q}`, { headers: MD }), args);
-    },
-  },
-  {
-    name: "read_journal",
-    description:
-      "Read journal entries after `after`, oldest first. If the page holds as many entries as `limit`, call again with the last seq shown. " +
-      "With `before` instead, read the newest `limit` entries before that seq (still oldest first); if older entries remain, the output says so and gives the next `before`.",
-    inputSchema: object({ state: stateArg, after: afterArg, before: beforeArg, limit: limitArg, maxChars: maxCharsArg }, ["state"]),
-    call: async (args, api) => {
-      const q = query({
-        after: int(args, "after"),
-        before: int(args, "before"),
-        limit: int(args, "limit"),
-        maxChars: int(args, "maxChars"),
-      });
-      return ok(await api("GET", `/states/${state(args)}/journal${q}`, { headers: MD }), args);
-    },
-  },
-  {
-    name: "get_journal_entry",
-    description: "Read one whole journal entry by its seq, e.g. one that read_journal or show_state cut with maxChars.",
-    inputSchema: object({ state: stateArg, seq: { type: "integer", minimum: 1, description: "Journal seq" } }, ["state", "seq"]),
-    call: async (args, api) => {
-      const seq = int(args, "seq");
-      if (seq === undefined) throw new ToolError("seq is required.");
-      return ok(await api("GET", `/states/${state(args)}/journal/${seq}`, { headers: MD }), args);
-    },
-  },
-  {
-    name: "search_journal",
-    description:
-      "Search past journal entries of a state, newest first: every keyword in `q` must occur in the body (\"double quotes\" keep a phrase; ASCII letters ignore case), and `kind` filters by kind. " +
-      "If more matches remain, the output gives the next `before`. Search finds past decisions; it does not replace reading the journal after the summary's covered seq.",
-    inputSchema: object(
-      {
-        state: stateArg,
-        q: { type: "string", description: "Keywords separated by spaces; all must occur" },
-        kind: { type: "string", description: "Only entries of this kind, e.g. decision" },
-        before: { type: "integer", minimum: 0, description: "Only matches with seq below this (the next page)" },
-        limit: { type: "integer", minimum: 1, maximum: 100, description: "At most this many matches (default 20)" },
-        maxChars: maxCharsArg,
-      },
-      ["state"],
-    ),
-    call: async (args, api) => {
-      const q = str(args, "q");
-      const kind = str(args, "kind");
-      if (!q?.trim() && !kind?.trim()) throw new ToolError("Pass q, kind, or both.");
-      const params = query({
-        q: q?.trim() ? q : undefined,
-        kind: kind?.trim() ? kind : undefined,
-        before: int(args, "before"),
-        limit: int(args, "limit"),
-        maxChars: int(args, "maxChars"),
-      });
-      return ok(await api("GET", `/states/${state(args)}/journal/search${params}`, { headers: MD }), args);
-    },
-  },
-  {
-    name: "get_section",
-    description: "Read one section as Markdown, with the version to pass when you write it.",
-    inputSchema: object({ state: stateArg, name: nameArg }, ["state", "name"]),
-    call: async (args, api) => {
-      const res = await api("GET", sectionPath(args), { headers: MD });
-      const content = await ok(res, args);
-      const version = /(\d+)/.exec(res.headers.get("ETag") ?? "")?.[1] ?? "?";
-      return `<!-- version: ${version} -->\n\n${content}`;
-    },
-  },
-  {
-    name: "put_section",
-    description:
-      "Write a whole section. Omit `version` only to create a new section; to overwrite, pass the version you read. Prefer replace_in_section for partial edits so nothing gets dropped.",
-    inputSchema: object({ state: stateArg, name: nameArg, content: { type: "string", description: "Markdown" }, version: versionArg }, [
-      "state",
-      "name",
-      "content",
-    ]),
-    call: async (args, api) => {
-      const version = int(args, "version");
-      const res = await api("PUT", sectionPath(args), {
-        body: JSON.stringify({ content: str(args, "content", true) }),
-        headers: { ...JSON_BODY, ...(version !== undefined ? { "If-Match": String(version) } : {}) },
-      });
-      return written(await ok(res, args));
-    },
-  },
-  {
-    name: "replace_in_section",
-    description:
-      "Replace `old` with `new` in a section. `old` must occur exactly once unless replaceAll is true. Pass the version you read.",
-    inputSchema: object(
-      {
-        state: stateArg,
-        name: nameArg,
-        version: versionArg,
-        old: { type: "string", description: "Exact text to replace" },
-        new: { type: "string", description: "Replacement text" },
-        replaceAll: { type: "boolean", description: "Replace every occurrence" },
-      },
-      ["state", "name", "version", "old", "new"],
-    ),
-    call: async (args, api) => {
-      const version = int(args, "version");
-      if (version === undefined) throw new ToolError("version is required: pass the version you read.");
-      const replaceAll = args.replaceAll ?? false;
-      if (typeof replaceAll !== "boolean") throw new ToolError("replaceAll must be a boolean.");
-      const res = await api("POST", `${sectionPath(args)}/replace`, {
-        body: JSON.stringify({ old: str(args, "old", true), new: str(args, "new", true), replaceAll }),
-        headers: { ...JSON_BODY, "If-Match": String(version) },
-      });
-      return written(await ok(res, args));
-    },
-  },
-  {
-    name: "get_summary",
-    description:
-      "Read the journal summary: what the journal says so far, condensed for resuming, with the journal seq it covers through. Read it, then only the journal entries after that seq.",
-    inputSchema: object({ state: stateArg }, ["state"]),
-    call: async (args, api) => {
-      const res = await api("GET", `/states/${state(args)}/summary`, { headers: MD });
-      const content = await ok(res, args, "summary");
-      const version = /(\d+)/.exec(res.headers.get("ETag") ?? "")?.[1] ?? "?";
-      const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
-      return `<!-- version: ${version}, covers journal through #${covered}; read the journal with after=${covered} -->\n\n${content}`;
-    },
-  },
-  {
-    name: "put_summary",
-    description:
-      "Write the whole journal summary together with coveredThroughSeq, the last journal seq the summary reflects. Never set it beyond the entries you actually read. Omit `version` only to create the summary; to overwrite, pass the version you read.",
-    inputSchema: object(
-      {
-        state: stateArg,
-        content: { type: "string", description: "Markdown: current situation, key decisions, open questions, next steps" },
-        coveredThroughSeq: { type: "integer", minimum: 0, description: "The last journal seq reflected in content" },
-        version: { type: "integer", minimum: 0, description: "The summary version you read" },
-      },
-      ["state", "content", "coveredThroughSeq"],
-    ),
-    call: async (args, api) => {
-      const version = int(args, "version");
-      const coveredThroughSeq = int(args, "coveredThroughSeq");
-      if (coveredThroughSeq === undefined) throw new ToolError("coveredThroughSeq is required.");
-      const res = await api("PUT", `/states/${state(args)}/summary`, {
-        body: JSON.stringify({ content: str(args, "content", true), coveredThroughSeq }),
-        headers: { ...JSON_BODY, ...(version !== undefined ? { "If-Match": String(version) } : {}) },
-      });
-      return writtenSummary(await ok(res, args, "summary"));
-    },
-  },
-  {
-    name: "append_journal",
-    description:
-      "Append an entry to the journal. Use kind report for work reports (what changed, the result, links, the next step) and decision for decisions.",
-    inputSchema: object(
-      {
-        state: stateArg,
-        body: { type: "string", description: "Markdown" },
-        kind: { type: "string", description: "report | decision | note | ... (default: note)" },
-      },
-      ["state", "body"],
-    ),
-    call: async (args, api) => {
-      const body = str(args, "body", true);
-      if (!body.trim()) throw new ToolError("body is empty.");
-      const res = await api("POST", `/states/${state(args)}/journal`, {
-        body: JSON.stringify({ kind: str(args, "kind") ?? "note", body }),
-        headers: JSON_BODY,
-      });
-      const { entry } = JSON.parse(await ok(res, args)) as { entry: { seq: number; kind: string } };
-      return `Appended ${entry.kind} #${entry.seq}.`;
-    },
-  },
-  {
-    name: "set_status",
-    description:
-      "Set the status. waiting (with the question for the human in `note`) and completed (with a summary) notify the human.",
-    inputSchema: object(
-      {
-        state: stateArg,
-        status: { type: "string", enum: STATUSES },
-        note: { type: "string", description: "What the human should know or decide" },
-      },
-      ["state", "status"],
-    ),
-    call: async (args, api) => {
-      const status = str(args, "status", true);
-      if (!STATUSES.includes(status)) throw new ToolError(`status must be one of ${STATUSES.join(", ")}.`);
-      const note = str(args, "note");
-      const res = await api("PATCH", `/states/${state(args)}`, {
-        body: JSON.stringify(note !== undefined ? { status, statusNote: note } : { status }),
-        headers: JSON_BODY,
-      });
-      await ok(res, args);
-      return `Status of ${args.state} is now ${status}.`;
-    },
-  },
-];
+const exposed = (p: Param) => !p.mcp?.skip;
+const requiredFor = (p: Param) => p.mcp?.required ?? p.required ?? false;
+
+function schemaOf(op: Operation): Json {
+  const properties: Json = {};
+  for (const p of op.params.filter(exposed)) {
+    const prop: Json = { type: p.type === "record" ? "object" : p.type };
+    if (p.type === "record") prop.additionalProperties = { type: "string" };
+    if (p.enum) prop.enum = p.enum;
+    if (p.type === "integer") prop.minimum = p.minimum ?? 0;
+    if (p.maximum !== undefined) prop.maximum = p.maximum;
+    prop.description = p.mcp?.description ?? p.description;
+    properties[argOf(p)] = prop;
+  }
+  const required = op.params.filter((p) => exposed(p) && requiredFor(p)).map(argOf);
+  return { type: "object", properties, required, additionalProperties: false };
+}
+
+/** Checks the arguments against the spec and returns them by their HTTP names. */
+function inputOf(op: Operation, args: Json): Json {
+  const input: Json = {};
+  for (const p of op.params.filter(exposed)) {
+    const key = argOf(p);
+    let v = args[key];
+    if (v === null && !p.nullable) v = undefined;
+    if (v !== undefined && v !== null) {
+      const ok =
+        p.type === "string"
+          ? typeof v === "string"
+          : p.type === "integer"
+            ? typeof v === "number" && Number.isInteger(v) && v >= 0
+            : p.type === "boolean"
+              ? typeof v === "boolean"
+              : typeof v === "object" && !Array.isArray(v);
+      if (!ok) {
+        const what = { string: "a string", integer: "a non-negative integer", boolean: "a boolean", record: "an object of strings" }[p.type];
+        throw new ToolError(`${key} must be ${what}.`);
+      }
+      if (typeof v === "string" && p.omitBlank && !v.trim()) v = undefined;
+    }
+    if (typeof v === "string") {
+      if (p.enum && !p.enum.includes(v)) throw new ToolError(`${key} must be one of ${p.enum.join(", ")}.`);
+      if (p.nonBlank && !v.trim()) throw new ToolError(`${key} is empty.`);
+      // "." and ".." would be normalized away in the URL.
+      if (p.in === "path" && (v === "." || v === "..")) throw new ToolError(`${key} must not be "${v}".`);
+    }
+    if (v === undefined && requiredFor(p)) throw new ToolError(`${key} is required.`);
+    if (v !== undefined) input[p.name] = v;
+  }
+  const names = (list: readonly string[]) => list.map((n) => argOf(op.params.find((p) => p.name === n)!));
+  if (op.exclusive && op.exclusive.filter((n) => input[n] !== undefined).length > 1) {
+    throw new ToolError(`Pass either ${names(op.exclusive).join(" or ")}, not both.`);
+  }
+  if (op.anyOf && op.anyOf.every((n) => input[n] === undefined)) throw new ToolError(`Pass ${names(op.anyOf).join(", ")}, or both.`);
+  return input;
+}
 
 function writtenSummary(text: string) {
   const { summary } = JSON.parse(text) as { summary: { version: number; coveredThroughSeq: number } };
@@ -391,6 +177,51 @@ function written(text: string) {
   const { section } = JSON.parse(text) as { section: { name: string; version: number } };
   return `Wrote section ${section.name} (version ${section.version}).`;
 }
+
+const versionOf = (res: Response) => /(\d+)/.exec(res.headers.get("ETag") ?? "")?.[1] ?? "?";
+
+/** How a tool turns a successful response into its text, where the plain body is not the best answer. */
+const OUTPUT: Partial<Record<OperationId, (res: Response, text: string, input: Json) => string>> = {
+  getSection: (res, text) => `<!-- version: ${versionOf(res)} -->\n\n${text}`,
+  getSummary: (res, text) => {
+    const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
+    return `<!-- version: ${versionOf(res)}, covers journal through #${covered}; read the journal with after=${covered} -->\n\n${text}`;
+  },
+  putSection: (_res, text) => written(text),
+  replaceInSection: (_res, text) => written(text),
+  putSummary: (_res, text) => writtenSummary(text),
+  appendJournal: (_res, text) => {
+    const { entry } = JSON.parse(text) as { entry: { seq: number; kind: string } };
+    return `Appended ${entry.kind} #${entry.seq}.`;
+  },
+  updateState: (_res, text) => {
+    const { state } = JSON.parse(text) as { state: { id: string; status: string } };
+    return `Status of ${state.id} is now ${state.status}.`;
+  },
+};
+
+const SUMMARY_OPS: OperationId[] = ["getSummary", "putSummary", "listSummaryRevisions"];
+
+const TOOLS: Tool[] = operations().flatMap(([id, op]): Tool[] => {
+  if ("skip" in op.mcp) return [];
+  return [
+    {
+      name: op.mcp.tool,
+      description: op.mcp.description,
+      inputSchema: schemaOf(op),
+      call: async (args, api) => {
+        const input = inputOf(op, args);
+        const headers: Record<string, string> = op.markdown === "no" ? {} : { ...MD };
+        const body = jsonBody(op, input);
+        if (body !== undefined) Object.assign(headers, JSON_BODY);
+        if (input.version !== undefined && op.params.some((p) => p.in === "ifMatch")) headers["If-Match"] = String(input.version);
+        const res = await api(op.method, `${fillPath(op, input as Record<string, string | number>)}${queryString(op, input)}`, { body, headers });
+        const text = await ok(res, args, SUMMARY_OPS.includes(id) ? "summary" : "section");
+        return OUTPUT[id]?.(res, text, input) ?? text;
+      },
+    },
+  ];
+});
 
 interface RpcRequest {
   jsonrpc?: unknown;

@@ -1,3 +1,5 @@
+import { operations } from "./ops/spec";
+
 /** Usage guide for agents, served at GET /api/guide as Markdown. */
 export function guideMarkdown(origin: string): string {
   return `# dura: shared state for agent loops
@@ -41,9 +43,7 @@ A one-line instruction in your agent configuration can be:
     Manage work state with dura. First read $DURA_URL/api/guide, then follow its Reading procedure (summary first, then every unread journal page) before choosing work.
 
 If your client is connected to dura over MCP (\`POST ${origin}/mcp\` with the same bearer token),
-the tools map to the CLI commands below: \`list_states\` (list), \`show_state\` (show),
-\`read_journal\` (journal), \`get_journal_entry\` (journal <seq>), \`search_journal\` (search), \`get_section\`, \`put_section\`, \`replace_in_section\` (section),
-\`get_summary\`, \`put_summary\` (summary), \`append_journal\` (log) and \`set_status\` (status). Pass the state id as \`state\` and
+the tools map to the CLI commands below: ${toolMap()}. Pass the state id as \`state\` and
 follow the same procedure.
 
 ## Model
@@ -299,24 +299,36 @@ After confirming the title and goal with the human, create a new state
 
 ### Endpoints
 
-    GET    /api/states                                   list states (?status=)
-    POST   /api/states                                   create {id?, title, status?, statusNote?, sections?}
-    GET    /api/states/:id                               state, summary, sections and journal (?after=, ?limit=, ?maxChars=)
-    PATCH  /api/states/:id                               {title?, status?, statusNote?}
-    GET    /api/states/:id/sections/:name                one section
-    PUT    /api/states/:id/sections/:name                write whole section (If-Match: version)
-    POST   /api/states/:id/sections/:name/replace        {old, new, replaceAll?} (If-Match required)
-    GET    /api/states/:id/sections/:name/revisions      every version of a section
-    GET    /api/states/:id/summary                       journal summary and its coveredThroughSeq
-    PUT    /api/states/:id/summary                       {content, coveredThroughSeq} (If-Match: version)
-    GET    /api/states/:id/summary/revisions             every version of the summary
-    GET    /api/states/:id/journal                       entries (?after= or ?before=, ?limit=, ?maxChars=)
-    GET    /api/states/:id/journal/:seq                  one whole entry
-    GET    /api/states/:id/journal/search                search (?q=, ?kind=, ?before=, ?limit=, ?maxChars=)
-    POST   /api/states/:id/journal                       append {kind, body} or Markdown body with ?kind=
-    GET    /api/guide                                    this document
+${endpointList()}
     POST   /mcp                                          MCP (Streamable HTTP, stateless, bearer token)
 
 Send \`Accept: text/markdown\` to get Markdown instead of JSON where it makes sense.
 `;
+}
+
+/** "`list_states` (list), `show_state` (show), ..." from the spec, so the guide lists every tool. */
+function toolMap(): string {
+  const items = operations().flatMap(([, op]) => {
+    if ("skip" in op.mcp) return [];
+    return [`\`${op.mcp.tool}\`${"command" in op.cli ? ` (${[op.cli.command, ...op.params.filter((p) => p.cli?.positional === true).map((p) => p.cli?.label ?? p.name)].join(" ")})` : ""}`];
+  });
+  return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+}
+
+/** One line per operation, from the spec. */
+function endpointList(): string {
+  return operations()
+    .map(([, op]) => {
+      const query = op.params.filter((p) => p.in === "query").map((p) => `?${p.name}=`);
+      const body = op.params.filter((p) => p.in === "body").map((p) => `${p.name}${p.required ? "" : "?"}`);
+      const version = op.params.find((p) => p.in === "ifMatch");
+      const rawQuery = op.params.filter((p) => p.in === "body" && op.rawBody !== undefined && p.name !== op.rawBody).map((p) => `?${p.name}=`);
+      const notes = [
+        body.length ? `{${body.join(", ")}}${op.rawBody ? ` or a Markdown body${rawQuery.length ? ` with ${rawQuery.join(", ")}` : ""}` : ""}` : "",
+        query.length ? `(${query.join(", ")})` : "",
+        version ? (version.required ? "(If-Match required)" : "(If-Match: version)") : "",
+      ].filter(Boolean);
+      return `    ${op.method.padEnd(6)} ${`/api${op.path}`.padEnd(45)} ${[op.doc, ...notes].join(" ")}`;
+    })
+    .join("\n");
 }

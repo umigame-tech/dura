@@ -265,6 +265,17 @@ npm run typecheck
 
 スキーマ（`src/db/schema.ts`）を変更したら、`npm run db:generate` でマイグレーションを生成します。
 
+### 操作を足すとき
+
+REST API・CLI・MCP の操作は、すべて `src/ops/spec.ts` の `OPERATIONS` に 1 回だけ定義します。HTTP のメソッドとパス、引数の型と説明、CLI のコマンド名とフラグ、MCP のツール名と説明をここに書くと、API のルート・入力の検証、CLI のコマンド・ヘルプ、MCP のツール・入力スキーマ、`/api/guide` のエンドポイント一覧とツールの対応表が、そこから作られます。
+
+1. `src/ops/spec.ts` に操作（または既存の操作に引数）を足す
+2. `src/routes/api.ts` の `handlers` に処理を書く（足し忘れは型エラーになる）
+3. 出力を整えたいときだけ、`cli/src/cli.ts` と `src/mcp.ts` の `OUTPUT` に表示のしかたを足す（なければ API の応答をそのまま表示する）
+4. README、`cli/README.md`、dura スキルにコマンドとツールを書く
+
+`test/ops.test.ts` が、API の全ルートが仕様にあること、すべての操作と引数が CLI と MCP から使えること、ドキュメントがすべてのコマンドとツールに触れていることを確かめます。`src/ops/spec.ts` は CLI に同梱されるため、import を書かないでください。
+
 ### 構成
 
 ```
@@ -278,7 +289,10 @@ src/
   guide.ts          /api/guide の本文
   db/schema.ts      Drizzle のスキーマ
   lib/webpush.ts    WebCrypto による Web Push（RFC 8291 / RFC 8292）
-  routes/api.ts     REST API
+  ops/spec.ts       REST API・CLI・MCP の操作の定義（import なし。CLI にも同梱）
+  ops/http.ts       仕様からのルート登録と入力の検証
+  routes/api.ts     REST API の各操作の処理
+  mcp.ts            MCP サーバー（ツールは仕様から作る）
   routes/webauthn.ts パスキーの登録とログイン
   ui/               Hono JSX によるサーバーレンダリングの Web UI
 cli/src/            dura CLI（cli.ts が本体、main.ts が Node のエントリポイント）

@@ -1,0 +1,161 @@
+import type { Context, Hono } from "hono";
+import { assertRead, assertWrite, requireActor, type Actor } from "../auth";
+import type { AppEnv } from "../env";
+import { ApiError, badRequest } from "../lib/errors";
+import { hasType, operations, typeName, type Operation, type OperationId, type Param } from "./spec";
+
+/** The parsed input of an operation: every param that was given (or has a default), by its HTTP name. */
+export type Input = Record<string, unknown>;
+
+export type Handler = (c: Context<AppEnv>, input: Input, actor: Actor) => Response | Promise<Response>;
+
+export type Handlers = Record<OperationId, Handler>;
+
+/** The Hono path of an operation: integer path params only match digits, so `/journal/search` stays its own route. */
+export function honoPath(op: Operation): string {
+  return op.path.replace(/:([A-Za-z]+)/g, (m, name: string) => {
+    const p = op.params.find((x) => x.name === name && x.in === "path");
+    return p?.type === "integer" ? `${m}{[0-9]+}` : m;
+  });
+}
+
+/** Registers a route for every operation, in the order of the spec. Each route checks auth and parses its input first. */
+export function registerOperations(app: Hono<AppEnv>, handlers: Handlers) {
+  for (const [id, op] of operations()) {
+    const handler = handlers[id];
+    app.on(op.method, honoPath(op), async (c) => {
+      const actor = authorize(c, op);
+      const input = await parseInput(c, op);
+      return handler(c, declaredOnly(op, input), actor as Actor);
+    });
+  }
+}
+
+/**
+ * Lets a handler read only the params of its operation, so a param cannot be used by the API
+ * without being in the spec (and so in the CLI and MCP). Reading any other key throws.
+ */
+export function declaredOnly(op: Operation, input: Input): Input {
+  const names = new Set(op.params.map((p) => p.name));
+  const check = (key: string | symbol) => {
+    if (typeof key === "string" && !names.has(key)) throw new Error(`Param "${key}" is not in the spec of ${op.method} ${op.path}.`);
+  };
+  return new Proxy(input, {
+    get(target, key) {
+      check(key);
+      return Reflect.get(target, key);
+    },
+    has(target, key) {
+      check(key);
+      return Reflect.has(target, key);
+    },
+  });
+}
+
+function authorize(c: Context<AppEnv>, op: Operation): Actor | undefined {
+  if (op.auth === "public") return undefined;
+  const actor = requireActor(c);
+  if (op.auth === "read") assertRead(actor, c.req.param("id")!);
+  if (op.auth === "write") assertWrite(actor, c.req.param("id")!);
+  if (op.auth === "create") assertWrite(actor, null);
+  return actor;
+}
+
+function intParam(value: string | undefined, name: string): number | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+    throw badRequest(`${name} must be a non-negative integer.`);
+  }
+  return Number(value);
+}
+
+/** Accepts `7`, `"7"` and `W/"7"`. */
+function ifMatch(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const m = /^\s*(?:W\/)?"?(\d+)"?\s*$/.exec(raw);
+  if (!m) throw badRequest(`If-Match must be a version number such as 7 (got ${JSON.stringify(raw)}).`);
+  return Number(m[1]);
+}
+
+const isJson = (c: Context<AppEnv>) => (c.req.header("Content-Type") ?? "").includes("application/json");
+
+async function jsonObject(c: Context<AppEnv>): Promise<Record<string, unknown>> {
+  let v: unknown;
+  try {
+    v = await c.req.json();
+  } catch {
+    throw badRequest("Request body must be valid JSON.");
+  }
+  if (typeof v !== "object" || v === null || Array.isArray(v)) throw badRequest("Request body must be a JSON object.");
+  return v as Record<string, unknown>;
+}
+
+/** Checks a JSON value against its param. */
+function fromJson(p: Param, v: unknown): unknown {
+  if (v === undefined) return undefined;
+  if (v === null && p.nullable) return null;
+  if (!hasType(p, v)) {
+    if (p.type === "record" && typeof v === "object" && v !== null && !Array.isArray(v)) {
+      const key = Object.keys(v).find((k) => typeof (v as Record<string, unknown>)[k] !== "string");
+      throw badRequest(`${p.name}.${key} must be a string.`);
+    }
+    throw badRequest(`${p.name} must be ${typeName(p)}.`);
+  }
+  return v;
+}
+
+/** Converts a path or query string to its param's type. An empty number means none; an empty string stays "". */
+function fromString(p: Param, v: string | undefined): unknown {
+  if (v === undefined) return undefined;
+  if (v === "" && p.type !== "string") return undefined;
+  if (p.type === "integer") return intParam(v, p.name);
+  if (p.type === "boolean") {
+    if (v !== "true" && v !== "false") throw badRequest(`${p.name} must be true or false.`);
+    return v === "true";
+  }
+  return v;
+}
+
+export async function parseInput(c: Context<AppEnv>, op: Operation): Promise<Input> {
+  const input: Input = {};
+  // The version first: a write without If-Match is told so (428) before anything about its body.
+  const version = op.params.find((p) => p.in === "ifMatch");
+  if (version?.required && c.req.header("If-Match") === undefined) {
+    throw new ApiError(428, "precondition_required", `${op.method} ${op.path} requires If-Match: <the version you read>.`);
+  }
+  const bodyParams = op.params.filter((p) => p.in === "body");
+  let json: Record<string, unknown> | undefined;
+  if (bodyParams.length > 0) {
+    if (op.rawBody !== undefined && !isJson(c)) input[op.rawBody] = await c.req.text();
+    else json = await jsonObject(c);
+  }
+
+  for (const p of op.params) {
+    let v: unknown;
+    if (p.in === "path") v = fromString(p, c.req.param(p.name));
+    else if (p.in === "query") v = fromString(p, c.req.query(p.name));
+    else if (p.in === "ifMatch") v = ifMatch(c.req.header("If-Match"));
+    else if (p.name === op.rawBody && json === undefined) v = input[p.name];
+    else {
+      v = json !== undefined ? fromJson(p, json[p.name]) : undefined;
+      // With a raw body (or a JSON body without the field), the other fields may come from the query.
+      if (v === undefined && op.rawBody !== undefined) v = fromString(p, c.req.query(p.name));
+    }
+    if (typeof v === "string" && p.omitBlank && !v.trim()) v = undefined;
+    if (v !== undefined && v !== null && p.enum && !p.enum.includes(v as string)) {
+      throw badRequest(`${p.name} must be one of ${p.enum.join(", ")}.`);
+    }
+    if (typeof v === "number" && p.minimum !== undefined && v < p.minimum) throw badRequest(`${p.name} must be at least ${p.minimum}.`);
+    if (v === undefined && p.default !== undefined) v = p.default;
+    if (v === undefined && p.required) throw badRequest(`${p.name} is required and must be ${typeName(p)} (${p.description}).`);
+    input[p.name] = v;
+  }
+
+  if (op.exclusive && op.exclusive.filter((n) => input[n] !== undefined).length > 1) {
+    throw badRequest(`Pass either ${op.exclusive.join(" or ")}, not both.`);
+  }
+  if (op.anyOf && op.anyOf.every((n) => input[n] === undefined)) {
+    throw badRequest(op.anyOfMessage ?? `Pass at least one of ${op.anyOf.join(", ")}.`);
+  }
+  return input;
+}

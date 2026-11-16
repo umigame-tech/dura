@@ -35,6 +35,7 @@ dura guide                                  Print /api/guide
 ```
 
 Run `dura --help` for every option, and `dura guide` for how agents should use dura.
+A command fails (exit code 2, nothing sent) when it gets a flag or an argument it does not take, e.g. `dura show --kind x` or `dura show extra`.
 
 ## License
 

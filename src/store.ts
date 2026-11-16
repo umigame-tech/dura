@@ -11,6 +11,7 @@ import {
 } from "./db/schema";
 import { ApiError, badRequest, isUniqueViolation, notFound } from "./lib/errors";
 import { ID_PATTERN, nowIso, SECTION_NAME_PATTERN, slugify } from "./lib/util";
+import { JOURNAL_LIMIT, SEARCH_LIMIT } from "./ops/spec";
 
 export type State = typeof states.$inferSelect;
 export type Section = typeof sections.$inferSelect;
@@ -320,7 +321,7 @@ export async function listJournal(
   stateId: string,
   opts: { after?: number; limit?: number } = {},
 ): Promise<JournalEntry[]> {
-  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
+  const limit = Math.min(Math.max(opts.limit ?? JOURNAL_LIMIT.default, 1), JOURNAL_LIMIT.max);
   return db
     .select()
     .from(journalEntries)
@@ -338,7 +339,7 @@ export async function listJournalBefore(
   stateId: string,
   opts: { before: number; limit?: number },
 ): Promise<{ entries: JournalEntry[]; olderBefore: number | null }> {
-  const limit = Math.min(Math.max(opts.limit ?? 200, 1), 1000);
+  const limit = Math.min(Math.max(opts.limit ?? JOURNAL_LIMIT.default, 1), JOURNAL_LIMIT.max);
   const rows = await db
     .select()
     .from(journalEntries)
@@ -376,7 +377,7 @@ export async function searchJournal(
   stateId: string,
   opts: { terms: string[]; kind?: string; before?: number; limit?: number },
 ): Promise<{ entries: JournalEntry[]; nextBefore: number | null }> {
-  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 100);
+  const limit = Math.min(Math.max(opts.limit ?? SEARCH_LIMIT.default, 1), SEARCH_LIMIT.max);
   const conditions = [eq(journalEntries.stateId, stateId)];
   if (opts.before !== undefined) conditions.push(lt(journalEntries.seq, opts.before));
   if (opts.kind !== undefined) conditions.push(eq(journalEntries.kind, opts.kind));

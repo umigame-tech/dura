@@ -1,5 +1,7 @@
 import { parseArgs } from "node:util";
 import { version } from "../package.json";
+import { versionFromEtag, writtenMessage } from "../../src/ops/messages";
+import { fillPath, flagOf, ifMatchHeader, isSummaryOperation, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "../../src/ops/spec";
 
 /** Everything the CLI touches outside itself, so tests can run it against an in-process app. */
 export interface Io {
@@ -12,53 +14,6 @@ export interface Io {
 }
 
 export const VERSION = version;
-
-const STATUSES = ["active", "waiting", "completed", "abandoned"];
-
-const USAGE = `Usage: dura <command> [options]
-
-Commands:
-  show                          Print the state: every section and the journal (Markdown)
-  list                          List the states the token can read
-  section get <name>            Print a section (its version goes to stderr)
-  section put <name>            Write a whole section from stdin or --file
-  section replace <name>        Replace --old with --new in a section
-  summary get                   Print the journal summary (its version and covered seq go to stderr)
-  summary put                   Write the journal summary from stdin or --file, with --covered
-  log [message...]              Append to the journal (message from args, stdin or --file)
-  journal                       Print journal entries after --after, or the newest before --before
-  journal <seq>                 Print one whole journal entry
-  search [keywords...]          Search the journal, newest first (every keyword must occur; --kind filters)
-  status <status>               Set the status: ${STATUSES.join(" | ")}
-  guide                         Print the usage guide served by the server (no token needed)
-
-Options:
-  -s, --state <id>              State id (default: $DURA_STATE)
-      --url <url>               Server URL (default: $DURA_URL)
-      --token-file <path>       Read the token from a file (default: $DURA_TOKEN)
-      --token-stdin             Read the token from stdin (default: $DURA_TOKEN)
-      --after <seq>             show / journal: only entries after this seq
-      --before <seq>            journal / search: the newest entries before this seq (a large value gives the latest)
-      --limit <n>               show / journal / search: at most n entries
-      --max-chars <n>           show / journal / search: cut longer entry bodies to n characters (the cut is marked)
-      --version <n>             section put / replace, summary put: the version you read
-      --covered <seq>           summary put: the last journal seq the summary reflects
-      --file <path>             section put / summary put / log: read the body from a file
-      --old <text>              section replace: text to replace (must occur once)
-      --new <text>              section replace: replacement text
-      --all                     section replace: replace every occurrence
-      --kind <kind>             log: report | decision | note | ... (default: note); search: only this kind
-      --note <text>             status: what the human should know or decide
-      --status <status>         list: only states with this status
-      --json                    Print the JSON response instead of Markdown
-  -h, --help                    Show this help
-  -V                            Show the CLI version
-
-Environment:
-  DURA_URL                      Server URL, e.g. https://dura.example.com
-  DURA_TOKEN                    Bearer token (never taken as a flag value, to keep it out of shell history)
-  DURA_STATE                    Default state id
-`;
 
 export class CliError extends Error {}
 
@@ -85,17 +40,6 @@ export function loadConfig(env: Io["env"], opts: { url?: string; token?: string;
   const source = opts.url !== undefined ? "--url" : "DURA_URL";
   if (!/^https?:\/\//.test(url!)) throw new CliError(`${source} must start with http:// or https:// (got ${url}).`);
   return { url: url!.replace(/\/+$/, ""), token };
-}
-
-function intOption(value: string | undefined, name: string): number | undefined {
-  if (value === undefined) return undefined;
-  if (!/^\d+$/.test(value)) throw new CliError(`--${name} must be a non-negative integer.`);
-  return Number(value);
-}
-
-function query(params: Record<string, string | number | undefined>): string {
-  const entries = Object.entries(params).filter((e): e is [string, string | number] => e[1] !== undefined);
-  return entries.length ? `?${new URLSearchParams(entries.map(([k, v]) => [k, String(v)]))}` : "";
 }
 
 interface ApiErrorBody {
@@ -151,8 +95,8 @@ function parseError(status: number, text: string): ApiErrorBody {
 }
 
 /** What to do next, phrased for the CLI instead of raw HTTP. */
-function hint(err: ResponseError, ctx: { command: string; name?: string; stateId?: string }): string | undefined {
-  if (ctx.command === "summary") {
+function hint(err: ResponseError, ctx: { summary?: boolean; name?: string; stateId?: string }): string | undefined {
+  if (ctx.summary) {
     switch (err.body.code) {
       case "version_conflict":
         return (
@@ -195,28 +139,104 @@ function hint(err: ResponseError, ctx: { command: string; name?: string; stateId
 
 const MD = { Accept: "text/markdown" };
 
-const OPTIONS = {
+/** A CLI command made from an operation of the spec. */
+interface Command {
+  id: OperationId;
+  op: Operation;
+  /** The command words, e.g. "section get". */
+  name: string;
+  words: string[];
+  params: Param[];
+  positionals: Param[];
+  flags: Param[];
+  /** Reads a param from --file or stdin. */
+  stdin?: Param;
+  usage: string;
+  summary: string;
+}
+
+const labelOf = (p: Param) => p.cli?.label ?? `<${p.name}>`;
+
+const COMMANDS: Command[] = operations().flatMap(([id, op]): Command[] => {
+  if ("skip" in op.cli) return [];
+  const params = op.params.filter((p) => !p.cli?.skip);
+  const positionals = params.filter((p) => p.cli?.positional);
+  return [
+    {
+      id,
+      op,
+      name: op.cli.command,
+      words: op.cli.command.split(" "),
+      params,
+      positionals,
+      flags: params.filter((p) => !p.cli?.positional && !p.cli?.state && !p.cli?.stdin),
+      stdin: params.find((p) => p.cli?.stdin),
+      usage: [op.cli.command, ...positionals.map(labelOf)].join(" "),
+      summary: op.cli.summary,
+    },
+  ];
+});
+
+const GLOBAL_OPTIONS = {
   state: { type: "string", short: "s" },
   url: { type: "string" },
   "token-file": { type: "string" },
   "token-stdin": { type: "boolean" },
-  after: { type: "string" },
-  before: { type: "string" },
-  limit: { type: "string" },
-  "max-chars": { type: "string" },
-  version: { type: "string" },
-  covered: { type: "string" },
   file: { type: "string" },
-  old: { type: "string" },
-  new: { type: "string" },
-  all: { type: "boolean" },
-  kind: { type: "string" },
-  note: { type: "string" },
-  status: { type: "string" },
   json: { type: "boolean" },
   help: { type: "boolean", short: "h" },
   "cli-version": { type: "boolean", short: "V" },
 } as const;
+
+type OptionSpec = { type: "string" | "boolean"; short?: string };
+
+/** Every flag of every command. A flag that several commands share must have one type (test/ops.test.ts). */
+export const OPTIONS: Record<string, OptionSpec> = { ...GLOBAL_OPTIONS };
+for (const cmd of COMMANDS) {
+  for (const p of cmd.flags) OPTIONS[flagOf(p)] = { type: p.type === "boolean" ? "boolean" : "string" };
+}
+
+function optionHelp(): string {
+  const byFlag = new Map<string, { label: string; uses: { command: string; help: string }[] }>();
+  for (const cmd of COMMANDS) {
+    for (const p of cmd.flags) {
+      const flag = flagOf(p);
+      const entry = byFlag.get(flag) ?? { label: p.type === "boolean" ? "" : ` ${labelOf(p)}`, uses: [] };
+      entry.uses.push({ command: cmd.name, help: p.cli?.help ?? p.description });
+      byFlag.set(flag, entry);
+    }
+  }
+  const line = (left: string, right: string) => `  ${left.padEnd(30)}${right}\n`;
+  let text = "";
+  for (const [flag, { label, uses }] of byFlag) {
+    const groups = new Map<string, string[]>();
+    for (const u of uses) groups.set(u.help, [...(groups.get(u.help) ?? []), u.command]);
+    const desc = [...groups].map(([help, cmds]) => `${[...new Set(cmds)].join(" / ")}: ${help}`).join("; ");
+    text += line(`    --${flag}${label}`, desc);
+  }
+  const fileCommands = COMMANDS.filter((c) => c.stdin).map((c) => c.name);
+  text += line("    --file <path>", `${fileCommands.join(" / ")}: read the body from a file`);
+  return text;
+}
+
+const USAGE = `Usage: dura <command> [options]
+
+Commands:
+${COMMANDS.map((c) => `  ${c.usage.padEnd(30)}${c.summary}\n`).join("")}
+Options:
+  -s, --state <id>              State id (default: $DURA_STATE)
+      --url <url>               Server URL (default: $DURA_URL)
+      --token-file <path>       Read the token from a file (default: $DURA_TOKEN)
+      --token-stdin             Read the token from stdin (default: $DURA_TOKEN)
+${optionHelp()}      --json                    Print the JSON response instead of Markdown
+  -h, --help                    Show this help
+  -V                            Show the CLI version
+
+Environment:
+  DURA_URL                      Server URL, e.g. https://dura.example.com
+  DURA_TOKEN                    Bearer token (never taken as a flag value, to keep it out of shell history)
+  DURA_STATE                    Default state id
+`;
 
 /**
  * Joins `--old "- [ ] a"` into `--old=- [ ] a`. parseArgs rejects option values that start
@@ -227,12 +247,57 @@ function joinStringOptions(argv: string[]): string[] {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     const name = arg.startsWith("--") ? arg.slice(2) : undefined;
-    const opt = name !== undefined ? (OPTIONS as Record<string, { type: string }>)[name] : undefined;
+    const opt = name !== undefined ? OPTIONS[name] : undefined;
     if (opt?.type === "string" && i + 1 < argv.length) out.push(`${arg}=${argv[++i]}`);
     else out.push(arg);
   }
   return out;
 }
+
+/** Finds the command for the positional arguments; the rest are its own positional arguments. */
+function resolve(positionals: string[]): { cmd: Command; args: string[] } {
+  const matches = COMMANDS.filter((c) => c.words.every((w, i) => positionals[i] === w));
+  if (matches.length === 0) {
+    const group = COMMANDS.filter((c) => c.words.length > 1 && c.words[0] === positionals[0]);
+    if (group.length > 0) throw new CliError(`Use \`dura ${positionals[0]} ${group.map((c) => c.words[1]).join("|")}\`.`);
+    throw new CliError(`Unknown command "${positionals[0]}". Run \`dura --help\`.`);
+  }
+  const longest = Math.max(...matches.map((c) => c.words.length));
+  const cands = matches.filter((c) => c.words.length === longest);
+  const args = positionals.slice(longest);
+  const fits = (c: Command) => c.positionals.some((p) => p.cli?.positional === "rest") || c.positionals.length === args.length;
+  const cmd = cands.find((c) => c.positionals.length === args.length) ?? cands.find(fits) ?? (cands.length === 1 ? cands[0] : undefined);
+  if (!cmd) throw new CliError(`Use ${cands.map((c) => `\`dura ${c.usage}\``).join(" or ")}.`);
+  if (!fits(cmd)) {
+    throw new CliError(args.length > cmd.positionals.length ? `Too many arguments: \`dura ${cmd.usage}\`.` : `Missing ${labelOf(cmd.positionals[args.length]!)}: \`dura ${cmd.usage}\`.`);
+  }
+  return { cmd, args };
+}
+
+/** How a param is named in CLI messages. */
+const shown = (p: Param) => (p.cli?.positional ? labelOf(p) : p.cli?.stdin ? "the body (stdin or --file)" : `--${flagOf(p)}`);
+
+function convert(p: Param, raw: string): string | number {
+  if (p.type === "integer") {
+    if (!/^\d+$/.test(raw)) throw new CliError(`${shown(p)} must be a non-negative integer.`);
+    return Number(raw);
+  }
+  if (p.enum && !p.enum.includes(raw)) throw new CliError(`${p.name} must be one of ${p.enum.join(", ")}.`);
+  return raw;
+}
+
+/** How a command shows a read whose headers matter (never with --json). Writes are reported by writtenMessage. */
+const OUTPUT: Partial<Record<OperationId, (r: { res: Response; text: string }, io: Io, print: (text: string) => void) => void>> = {
+  getSection: ({ res, text }, io) => {
+    io.stdout(text);
+    io.stderr(`version: ${versionFromEtag(res.headers.get("ETag"))}\n`);
+  },
+  getSummary: ({ res, text }, io, print) => {
+    print(text);
+    const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
+    io.stderr(`version: ${versionFromEtag(res.headers.get("ETag"))}, covers journal through #${covered} (read on with --after ${covered})\n`);
+  },
+};
 
 export async function run(argv: string[], io: Io): Promise<number> {
   let parsed;
@@ -242,139 +307,105 @@ export async function run(argv: string[], io: Io): Promise<number> {
     io.stderr(`dura: ${(err as Error).message}\n\n${USAGE}`);
     return 2;
   }
-  const { values: opts, positionals } = parsed;
-  const [command, ...rest] = positionals;
+  const opts = parsed.values as Record<string, string | boolean | undefined>;
+  const positionals = parsed.positionals;
 
   if (opts["cli-version"]) {
     io.stdout(`${VERSION}\n`);
     return 0;
   }
-  if (opts.help || !command || command === "help") {
+  if (opts.help || positionals.length === 0 || positionals[0] === "help") {
     io.stdout(USAGE);
-    return command || opts.help ? 0 : 2;
+    return positionals.length > 0 || opts.help ? 0 : 2;
   }
 
-  const ctx: { command: string; name?: string; stateId?: string } = { command };
+  const ctx: { summary?: boolean; name?: string; stateId?: string } = {};
+  const str = (key: string) => opts[key] as string | undefined;
   try {
-    if (opts["token-file"] !== undefined && opts["token-stdin"]) {
+    const { cmd, args } = resolve(positionals);
+    const { op } = cmd;
+    ctx.summary = isSummaryOperation(op);
+    const given = Object.keys(opts).filter((k) => opts[k] !== undefined && !(k in GLOBAL_OPTIONS));
+    const unknown = given.find((k) => !cmd.flags.some((p) => flagOf(p) === k));
+    if (unknown) throw new CliError(`\`dura ${cmd.usage}\` does not take --${unknown}.`);
+    if (str("file") !== undefined && !cmd.stdin) throw new CliError(`\`dura ${cmd.usage}\` does not take --file.`);
+    if (opts.json && op.markdown === "only") throw new CliError(`${cmd.name} is only available as Markdown; drop --json.`);
+
+    if (str("token-file") !== undefined && opts["token-stdin"]) {
       throw new CliError("Pass either --token-file or --token-stdin, not both.");
     }
+    // A public endpoint (guide) never gets the token, so it does not read one either (a revoked one would make it fail).
+    const needsToken = op.auth !== "public";
     let token: string | undefined;
-    if (command === "guide") {
-      // guide never sends a token, so it does not read one either.
-    } else if (opts["token-file"] !== undefined) {
-      token = (await io.readFile(opts["token-file"])).trim();
-      if (!token) throw new CliError(`The token file ${opts["token-file"]} is empty.`);
+    if (!needsToken) {
+      // Nothing to read.
+    } else if (str("token-file") !== undefined) {
+      token = (await io.readFile(str("token-file")!)).trim();
+      if (!token) throw new CliError(`The token file ${str("token-file")} is empty.`);
     } else if (opts["token-stdin"]) {
       token = (await io.readStdin()).trim();
       if (!token) throw new CliError("--token-stdin read an empty token.");
     }
-    // guide reads a public endpoint, so it never sends the token (a revoked one would make it fail).
-    const config = loadConfig(io.env, { url: opts.url, token, requireToken: command !== "guide" });
-    const client = new Client(command === "guide" ? { url: config.url } : config, io);
-    const stateId = () => {
-      const id = (opts.state ?? io.env.DURA_STATE)?.trim();
-      if (!id) throw new CliError("No state given. Pass --state <id> or set DURA_STATE.");
-      ctx.stateId = id;
-      return encodeURIComponent(id);
-    };
+    const config = loadConfig(io.env, { url: str("url"), token, requireToken: needsToken });
+    const client = new Client(needsToken ? config : { url: config.url }, io);
+
     const body = async () => {
-      if (opts.file !== undefined) return io.readFile(opts.file);
+      if (str("file") !== undefined) return io.readFile(str("file")!);
       if (opts["token-stdin"]) throw new CliError("stdin already carries the token (--token-stdin); pass the body with --file.");
       return io.readStdin();
     };
-    const print = (text: string) => io.stdout(text.endsWith("\n") ? text : `${text}\n`);
-    const accept = opts.json ? {} : MD;
 
-    switch (command) {
-      case "show": {
-        const q = query({
-          after: intOption(opts.after, "after"),
-          limit: intOption(opts.limit, "limit"),
-          maxChars: intOption(opts["max-chars"], "max-chars"),
-        });
-        print((await client.request("GET", `/states/${stateId()}${q}`, { headers: accept })).text);
-        return 0;
-      }
-      case "list": {
-        print((await client.request("GET", `/states${query({ status: opts.status })}`, { headers: accept })).text);
-        return 0;
-      }
-      case "journal": {
-        if (rest.length > 0) {
-          const seq = rest[0]!;
-          if (rest.length > 1 || !/^\d+$/.test(seq)) throw new CliError("Use `dura journal <seq>` with one journal seq.");
-          if ([opts.after, opts.before, opts.limit, opts["max-chars"]].some((v) => v !== undefined)) {
-            throw new CliError("`dura journal <seq>` prints one whole entry; drop --after, --before, --limit and --max-chars.");
-          }
-          print((await client.request("GET", `/states/${stateId()}/journal/${seq}`, { headers: accept })).text);
-          return 0;
-        }
-        if (opts.after !== undefined && opts.before !== undefined) {
-          throw new CliError("Pass either --after (newer entries) or --before (older entries), not both.");
-        }
-        const q = query({
-          after: intOption(opts.after, "after"),
-          before: intOption(opts.before, "before"),
-          limit: intOption(opts.limit, "limit"),
-          maxChars: intOption(opts["max-chars"], "max-chars"),
-        });
-        print((await client.request("GET", `/states/${stateId()}/journal${q}`, { headers: accept })).text);
-        return 0;
-      }
-      case "search": {
+    const values: Record<string, unknown> = {};
+    // The body is read last, so a missing flag is reported before the CLI waits on stdin.
+    const ordered = [...cmd.params.filter((p) => !p.cli?.stdin), ...cmd.params.filter((p) => p.cli?.stdin)];
+    for (const p of ordered) {
+      let v: unknown;
+      if (p.cli?.state) {
+        const id = (str("state") ?? io.env.DURA_STATE)?.trim();
+        if (!id) throw new CliError("No state given. Pass --state <id> or set DURA_STATE.");
+        v = ctx.stateId = id;
+      } else if (p.cli?.positional === "rest") {
+        const words = args.slice(cmd.positionals.indexOf(p));
         // The shell already split the words; quote an argument with spaces so it stays one phrase.
-        const q = rest.map((w) => (/\s/.test(w) && !w.includes('"') ? `"${w}"` : w)).join(" ");
-        if (!q.trim() && opts.kind === undefined) throw new CliError("Pass keywords to search for, --kind, or both.");
-        const params = query({
-          q: q.trim() ? q : undefined,
-          kind: opts.kind,
-          before: intOption(opts.before, "before"),
-          limit: intOption(opts.limit, "limit"),
-          maxChars: intOption(opts["max-chars"], "max-chars"),
-        });
-        print((await client.request("GET", `/states/${stateId()}/journal/search${params}`, { headers: accept })).text);
-        return 0;
+        const joined = p.cli.join === "phrases" ? words.map((w) => (/\s/.test(w) && !w.includes('"') ? `"${w}"` : w)) : words;
+        v = words.length > 0 ? joined.join(" ") : undefined;
+      } else if (p.cli?.positional) {
+        const raw = args[cmd.positionals.indexOf(p)];
+        v = raw === undefined ? undefined : convert(p, raw);
+      } else if (!p.cli?.stdin) {
+        const raw = opts[flagOf(p)];
+        v = typeof raw === "string" ? convert(p, raw) : raw;
       }
-      case "guide": {
-        if (opts.json) throw new CliError("guide is only available as Markdown; drop --json.");
-        print((await client.request("GET", "/guide")).text);
-        return 0;
-      }
-      case "section":
-        return await section(client, rest, opts, { stateId, body, print, ctx, io });
-      case "summary":
-        return await summary(client, rest, opts, { stateId, body, print, ctx, io });
-      case "log": {
-        const text = rest.length > 0 ? rest.join(" ") : await body();
-        if (!text.trim()) throw new CliError("The journal entry is empty. Pass a message, --file, or pipe it on stdin.");
-        const kind = opts.kind ?? "note";
-        const { text: res } = await client.request("POST", `/states/${stateId()}/journal`, {
-          body: JSON.stringify({ kind, body: text }),
-          headers: { "Content-Type": "application/json" },
-        });
-        if (opts.json) print(res);
-        else io.stderr(`Appended ${kind} #${(JSON.parse(res) as { entry: { seq: number } }).entry.seq}.\n`);
-        return 0;
-      }
-      case "status": {
-        const status = rest[0];
-        if (!status || !STATUSES.includes(status)) {
-          throw new CliError(`status must be one of ${STATUSES.join(", ")}.`);
-        }
-        const payload: { status: string; statusNote?: string } = { status };
-        if (opts.note !== undefined) payload.statusNote = opts.note;
-        const { text: res } = await client.request("PATCH", `/states/${stateId()}`, {
-          body: JSON.stringify(payload),
-          headers: { "Content-Type": "application/json" },
-        });
-        if (opts.json) print(res);
-        else io.stderr(`Status of ${ctx.stateId} is now ${status}.\n`);
-        return 0;
-      }
-      default:
-        throw new CliError(`Unknown command "${command}". Run \`dura --help\`.`);
+      if (v === undefined && p.cli?.stdin) v = await body();
+      if (typeof v === "string" && p.omitBlank && !v.trim()) v = undefined;
+      if (typeof v === "string" && p.nonBlank && !v.trim()) throw new CliError(`${shown(p)} is empty. Pass it as an argument, with --file, or on stdin.`);
+      if (v === undefined && (p.cli?.required ?? p.required)) throw new CliError(`${cmd.name} needs ${shown(p)}${p.cli?.positional ? "" : ` ${labelOf(p)}`}.`);
+      if (v !== undefined) values[p.name] = v;
     }
+    if (typeof values.name === "string") ctx.name = values.name;
+    const names = (list: readonly string[]) => list.map((n) => shown(cmd.params.find((p) => p.name === n)!));
+    if (op.exclusive && op.exclusive.filter((n) => values[n] !== undefined).length > 1) {
+      throw new CliError(`Pass either ${names(op.exclusive).join(" or ")}, not both.`);
+    }
+    if (op.anyOf && op.anyOf.every((n) => values[n] === undefined)) throw new CliError(`Pass ${names(op.anyOf).join(", ")}, or both.`);
+
+    const payload = jsonBody(op, values);
+    const headers = {
+      ...(op.markdown === "yes" && !opts.json ? MD : {}),
+      ...(payload !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...ifMatchHeader(op, values),
+    };
+    const res = await client.request(op.method, `${fillPath(op, values as Record<string, string | number>)}${queryString(op, values)}`, {
+      body: payload,
+      headers,
+    });
+    const print = (text: string) => io.stdout(text.endsWith("\n") ? text : `${text}\n`);
+    const output = opts.json ? undefined : OUTPUT[cmd.id];
+    const written = opts.json ? undefined : writtenMessage(cmd.id, res.text);
+    if (output) output(res, io, print);
+    else if (written) io.stderr(`${written}\n`);
+    else print(res.text);
+    return 0;
   } catch (err) {
     if (err instanceof CliError) {
       io.stderr(`dura: ${err.message}\n`);
@@ -387,97 +418,4 @@ export async function run(argv: string[], io: Io): Promise<number> {
     }
     throw err;
   }
-}
-
-async function section(
-  client: Client,
-  args: string[],
-  opts: { version?: string; old?: string; new?: string; all?: boolean; json?: boolean },
-  h: {
-    stateId: () => string;
-    body: () => Promise<string>;
-    print: (text: string) => void;
-    ctx: { name?: string };
-    io: Io;
-  },
-): Promise<number> {
-  const [sub, name] = args;
-  if (!sub || !["get", "put", "replace"].includes(sub)) {
-    throw new CliError("Use `dura section get|put|replace <name>`.");
-  }
-  if (!name) throw new CliError(`Missing the section name: dura section ${sub} <name>.`);
-  h.ctx.name = name;
-  const path = `/states/${h.stateId()}/sections/${encodeURIComponent(name)}`;
-  const version = intOption(opts.version, "version");
-  const ifMatch: Record<string, string> = version !== undefined ? { "If-Match": String(version) } : {};
-  const written = (text: string) => {
-    if (opts.json) return h.print(text);
-    const s = (JSON.parse(text) as { section: { name: string; version: number } }).section;
-    h.io.stderr(`Wrote section ${s.name} (version ${s.version}).\n`);
-  };
-
-  if (sub === "get") {
-    if (opts.json) {
-      h.print((await client.request("GET", path)).text);
-      return 0;
-    }
-    const { res, text } = await client.request("GET", path, { headers: MD });
-    h.io.stdout(text);
-    h.io.stderr(`version: ${/(\d+)/.exec(res.headers.get("ETag") ?? "")?.[1] ?? "?"}\n`);
-    return 0;
-  }
-  if (sub === "put") {
-    const content = await h.body();
-    written((await client.request("PUT", path, { body: content, headers: { "Content-Type": "text/markdown", ...ifMatch } })).text);
-    return 0;
-  }
-  if (version === undefined) throw new CliError("section replace needs --version <the version you read>.");
-  if (opts.old === undefined || opts.new === undefined) throw new CliError("section replace needs --old and --new.");
-  const payload = JSON.stringify({ old: opts.old, new: opts.new, replaceAll: opts.all ?? false });
-  written((await client.request("POST", `${path}/replace`, { body: payload, headers: { "Content-Type": "application/json", ...ifMatch } })).text);
-  return 0;
-}
-
-async function summary(
-  client: Client,
-  args: string[],
-  opts: { version?: string; covered?: string; json?: boolean },
-  h: {
-    stateId: () => string;
-    body: () => Promise<string>;
-    print: (text: string) => void;
-    ctx: { name?: string };
-    io: Io;
-  },
-): Promise<number> {
-  const [sub] = args;
-  if (!sub || !["get", "put"].includes(sub)) throw new CliError("Use `dura summary get|put`.");
-  const path = `/states/${h.stateId()}/summary`;
-
-  if (sub === "get") {
-    if (opts.json) {
-      h.print((await client.request("GET", path)).text);
-      return 0;
-    }
-    const { res, text } = await client.request("GET", path, { headers: MD });
-    h.io.stdout(text.endsWith("\n") ? text : `${text}\n`);
-    const version = /(\d+)/.exec(res.headers.get("ETag") ?? "")?.[1] ?? "?";
-    const covered = res.headers.get("X-Covered-Through-Seq") ?? "?";
-    h.io.stderr(`version: ${version}, covers journal through #${covered} (read on with --after ${covered})\n`);
-    return 0;
-  }
-  const covered = intOption(opts.covered, "covered");
-  if (covered === undefined) throw new CliError("summary put needs --covered <the last journal seq the summary reflects>.");
-  const version = intOption(opts.version, "version");
-  const content = await h.body();
-  const { text } = await client.request("PUT", path, {
-    body: JSON.stringify({ content, coveredThroughSeq: covered }),
-    headers: { "Content-Type": "application/json", ...(version !== undefined ? { "If-Match": String(version) } : {}) },
-  });
-  if (opts.json) h.print(text);
-  else {
-    const s = (JSON.parse(text) as { summary: { version: number; coveredThroughSeq: number } }).summary;
-    h.io.stderr(`Wrote the journal summary (version ${s.version}, covers the journal through #${s.coveredThroughSeq}).\n`);
-  }
-  return 0;
 }

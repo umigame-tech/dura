@@ -1,4 +1,4 @@
-import { operations } from "./ops/spec";
+import { JOURNAL_LIMIT, operations, SEARCH_LIMIT } from "./ops/spec";
 
 /** Usage guide for agents, served at GET /api/guide as Markdown. */
 export function guideMarkdown(origin: string): string {
@@ -75,10 +75,10 @@ If it does not exist (\`summary_not_found\`), read the whole journal as below.
 
 Start with the sections and the first page of unread journal entries:
 
-    dura show --after <last-read-seq> --limit 1000
+    dura show --after <last-read-seq> --limit ${JOURNAL_LIMIT.max}
 
 Use the summary's covered seq, or 0 if there is no summary and you have no saved cursor. This returns at most
-1000 journal entries, not necessarily the latest page. Complete the paging
+${JOURNAL_LIMIT.max} journal entries, not necessarily the latest page. Complete the paging
 procedure below before choosing work.
 
 Read the goal, plan, tasks and journal before choosing work. If status is
@@ -87,13 +87,13 @@ Read the goal, plan, tasks and journal before choosing work. If status is
 \`--after <seq>\` limits the journal to entries newer than one you have already read.
 The document ends with the last journal seq; pass it next time:
 
-    dura show --after 41 --limit 1000
-    dura journal --after 41 --limit 1000
+    dura show --after 41 --limit ${JOURNAL_LIMIT.max}
+    dura journal --after 41 --limit ${JOURNAL_LIMIT.max}
 
-Journal entries are returned oldest first, with a default limit of 200 and a
-maximum of 1000 per request. If a page contains as many entries as the limit,
-continue with \`dura journal --after <last-page-seq> --limit 1000\`, using the
-last seq from the page just read. Repeat until a page contains fewer than 1000
+Journal entries are returned oldest first, with a default limit of ${JOURNAL_LIMIT.default} and a
+maximum of ${JOURNAL_LIMIT.max} per request. If a page contains as many entries as the limit,
+continue with \`dura journal --after <last-page-seq> --limit ${JOURNAL_LIMIT.max}\`, using the
+last seq from the page just read. Repeat until a page contains fewer than ${JOURNAL_LIMIT.max}
 entries. Use \`journal\` for subsequent pages so sections are fetched only once.
 Keep the last seq you read so you can resume without skipping entries.
 
@@ -197,10 +197,10 @@ REST error responses are JSON: \`{"error": {"code": "...", "message": "..."}}\`.
 
 ## Suggested loop
 
-1. Orchestrator: run \`dura summary get\`, then \`dura show --after <seq> --limit 1000\`, where
+1. Orchestrator: run \`dura summary get\`, then \`dura show --after <seq> --limit ${JOURNAL_LIMIT.max}\`, where
    \`<seq>\` is the summary's covered seq (0 if there is no summary).
-   If the journal page is full, continue with \`dura journal --after <last-page-seq> --limit 1000\`
-   until a page contains fewer than 1000 entries. Read all pages before choosing work.
+   If the journal page is full, continue with \`dura journal --after <last-page-seq> --limit ${JOURNAL_LIMIT.max}\`
+   until a page contains fewer than ${JOURNAL_LIMIT.max} entries. Read all pages before choosing work.
 2. Pick the next task and hand it to a sub-agent together with \`DURA_STATE\`.
 3. Sub-agent: do the work, then append a report with \`dura log --kind report\`.
 4. Orchestrator: read new reports, update \`tasks\` / \`design\` with targeted replacements, repeat.
@@ -218,10 +218,10 @@ The CLI is a client of this REST API. Direct HTTP requests use
 Read the sections and the first journal page:
 
     curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
-      "$DURA_URL/api/states/$DURA_STATE?after=0&limit=1000"
+      "$DURA_URL/api/states/$DURA_STATE?after=0&limit=${JOURNAL_LIMIT.max}"
 
 \`after=<seq>\` limits the journal to entries newer than one you have already read.
-The document ends with the last returned journal seq. If a page has 1000 entries,
+The document ends with the last returned journal seq. If a page has ${JOURNAL_LIMIT.max} entries,
 continue with the journal endpoint using that seq as after until a page has fewer
 entries. Save the last seq for your next session; use the same procedure as Reading above.
 
@@ -240,7 +240,7 @@ One section (raw Markdown; its version is in the \`ETag\` header):
 New journal entries only:
 
     curl -sS -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
-      "$DURA_URL/api/states/$DURA_STATE/journal?after=41&limit=1000"
+      "$DURA_URL/api/states/$DURA_STATE/journal?after=41&limit=${JOURNAL_LIMIT.max}"
 
 The newest entries before a seq (oldest first; JSON has \`olderBefore\`, the next \`before\` or null, and
 \`latestSeq\`, the newest seq in the state),
@@ -252,7 +252,7 @@ bodies cut to 500 characters, and one whole entry:
       "$DURA_URL/api/states/$DURA_STATE/journal/37"
 
 Search the journal, newest first (\`q\`: keywords that must all occur, \`"..."\` keeps a phrase; \`kind\`;
-at least one of them; \`limit\` defaults to 20, at most 100; JSON has \`nextBefore\`, the next \`before\` or null):
+at least one of them; \`limit\` defaults to ${SEARCH_LIMIT.default}, at most ${SEARCH_LIMIT.max}; JSON has \`nextBefore\`, the next \`before\` or null):
 
     curl -sS -G -H "Authorization: Bearer $DURA_TOKEN" -H "Accept: text/markdown" \\
       --data-urlencode "q=sqlite migration" -d kind=decision \\

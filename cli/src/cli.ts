@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { version } from "../package.json";
 import { versionFromEtag, writtenMessage } from "../../src/ops/messages";
-import { fillPath, flagOf, ifMatchHeader, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "../../src/ops/spec";
+import { fillPath, flagOf, ifMatchHeader, isSummaryOperation, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "../../src/ops/spec";
 
 /** Everything the CLI touches outside itself, so tests can run it against an in-process app. */
 export interface Io {
@@ -324,7 +324,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
   try {
     const { cmd, args } = resolve(positionals);
     const { op } = cmd;
-    ctx.summary = op.path.includes("/summary");
+    ctx.summary = isSummaryOperation(op);
     const given = Object.keys(opts).filter((k) => opts[k] !== undefined && !(k in GLOBAL_OPTIONS));
     const unknown = given.find((k) => !cmd.flags.some((p) => flagOf(p) === k));
     if (unknown) throw new CliError(`\`dura ${cmd.usage}\` does not take --${unknown}.`);

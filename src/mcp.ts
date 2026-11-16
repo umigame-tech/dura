@@ -4,7 +4,7 @@ import { publicOrigin, resolveActor } from "./auth";
 import type { AppEnv } from "./env";
 import { ApiError } from "./lib/errors";
 import { versionFromEtag, writtenMessage } from "./ops/messages";
-import { argOf, fillPath, hasType, ifMatchHeader, jsonBody, operations, queryString, typeName, type Operation, type OperationId, type Param } from "./ops/spec";
+import { argOf, fillPath, hasType, ifMatchHeader, isSummaryOperation, jsonBody, operations, queryString, typeName, type Operation, type OperationId, type Param } from "./ops/spec";
 
 /**
  * MCP (Streamable HTTP) adapter. Stateless and JSON-only: every tool call is translated into a
@@ -178,7 +178,7 @@ const TOOLS: Tool[] = operations().flatMap(([id, op]): Tool[] => {
         const body = jsonBody(op, input);
         const headers = { ...(op.markdown === "no" ? {} : MD), ...(body !== undefined ? JSON_BODY : {}), ...ifMatchHeader(op, input) };
         const res = await api(op.method, `${fillPath(op, input as Record<string, string | number>)}${queryString(op, input)}`, { body, headers });
-        const text = await ok(res, args, op.path.includes("/summary") ? "summary" : "section");
+        const text = await ok(res, args, isSummaryOperation(op) ? "summary" : "section");
         return OUTPUT[id]?.(res, text) ?? writtenMessage(id, text) ?? text;
       },
     },

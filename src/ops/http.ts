@@ -35,12 +35,19 @@ export function registerOperations(app: Hono<AppEnv>, handlers: Handlers) {
  * Lets a handler read only the params of its operation, so a param cannot be used by the API
  * without being in the spec (and so in the CLI and MCP). Reading any other key throws.
  */
-function declaredOnly(op: Operation, input: Input): Input {
+export function declaredOnly(op: Operation, input: Input): Input {
   const names = new Set(op.params.map((p) => p.name));
+  const check = (key: string | symbol) => {
+    if (typeof key === "string" && !names.has(key)) throw new Error(`Param "${key}" is not in the spec of ${op.method} ${op.path}.`);
+  };
   return new Proxy(input, {
     get(target, key) {
-      if (typeof key === "string" && !names.has(key)) throw new Error(`Param "${key}" is not in the spec of ${op.method} ${op.path}.`);
+      check(key);
       return Reflect.get(target, key);
+    },
+    has(target, key) {
+      check(key);
+      return Reflect.has(target, key);
     },
   });
 }

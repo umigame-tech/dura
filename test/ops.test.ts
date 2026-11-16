@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { run, type Io } from "../cli/src/cli";
 import { guideMarkdown } from "../src/guide";
-import { honoPath } from "../src/ops/http";
-import { argOf, flagOf, operations } from "../src/ops/spec";
+import { declaredOnly, honoPath } from "../src/ops/http";
+import { WRITTEN_OPERATIONS } from "../src/ops/messages";
+import { argOf, flagOf, OPERATIONS, operations } from "../src/ops/spec";
 import { api } from "../src/routes/api";
 import { setup } from "./helpers";
 
@@ -97,9 +98,15 @@ describe("one spec for the API, the CLI and MCP", () => {
     expect(await run(["--help"], io)).toBe(0);
     for (const [, op] of operations()) {
       if (!("command" in op.cli)) continue;
-      expect(help).toContain(`  ${op.cli.command}`);
+      expect(help).toMatch(new RegExp(`^  ${op.cli.command}( <| \\[| {2,})`, "m"));
       for (const p of op.params) {
-        if (!p.cli?.positional && !p.cli?.state && !p.cli?.stdin && !p.cli?.skip) expect(help).toContain(`--${flagOf(p)}`);
+        if (p.cli?.positional || p.cli?.state || p.cli?.stdin || p.cli?.skip) continue;
+        // The line of the flag names the commands that take it.
+        const line = help.split("\n").find((l) => l.trimStart().startsWith(`--${flagOf(p)} `) || l.trim() === `--${flagOf(p)}`);
+        expect(line, `--${flagOf(p)}`).toBeDefined();
+        expect(line!.replace(/^\s*--\S+( <[^>]+>)?\s+/, ""), `--${flagOf(p)} for ${op.cli.command}`).toMatch(
+          new RegExp(`(^|; |/ )${op.cli.command}( /|:)`),
+        );
       }
     }
   });
@@ -123,17 +130,44 @@ describe("one spec for the API, the CLI and MCP", () => {
   it("reads the request only through the spec in the API handlers", () => {
     // Handlers get their params from the spec (reading an undeclared one throws, see declaredOnly).
     // Reading the request directly would add a param the CLI and MCP never learn about.
-    const reads = [...read("src/routes/api.ts").matchAll(/c\.req\.\w+\([^)]*\)/g)].map((m) => m[0]);
-    expect(new Set(reads)).toEqual(new Set(['c.req.header("Accept")', 'c.req.query("format")']));
+    const source = read("src/routes/api.ts");
+    const reads = [...source.matchAll(/\breq\b[^;\n]*/g)].map((m) => m[0]);
+    expect(reads).toEqual(['req.header("Accept") ?? "") || c.req.query("format") === "md"']);
     for (const [id, op] of operations()) {
       if (op.auth === "read" || op.auth === "write") expect(op.path, `${id} checks access to the state in its path`).toMatch(/^\/states\/:id(\/|$)/);
+      const writes = op.method !== "GET";
+      expect(writes ? ["write", "create"] : ["public", "token", "read"], `${id}: ${op.method} with auth ${op.auth}`).toContain(op.auth);
     }
+  });
+
+  it("throws when a handler reads a param that is not in the spec", () => {
+    const input = declaredOnly(OPERATIONS.getSection, { id: "s", name: "tasks" });
+    expect(input.name).toBe("tasks");
+    expect(() => input.version).toThrow('Param "version" is not in the spec of GET /states/:id/sections/:name.');
+    expect(() => "version" in input).toThrow("not in the spec");
+  });
+
+  it("reports writes only for operations that exist", () => {
+    for (const id of WRITTEN_OPERATIONS) expect(Object.keys(OPERATIONS), id).toContain(id);
   });
 
   it("names only commands and tools that exist, in the docs, hints and instructions", () => {
     const commands = operations().flatMap(([, op]) => ("command" in op.cli ? [op.cli.command] : []));
     const tools = new Set(operations().flatMap(([, op]) => ("tool" in op.mcp ? [op.mcp.tool] : [])));
-    const files = ["README.md", "cli/README.md", ".agents/skills/dura/SKILL.md", "src/guide.ts", "src/mcp.ts", "cli/src/cli.ts"];
+    const files = [
+      "README.md",
+      "cli/README.md",
+      ".agents/skills/dura/SKILL.md",
+      "src/guide.ts",
+      "src/mcp.ts",
+      "src/store.ts",
+      "src/ops/spec.ts",
+      "cli/src/cli.ts",
+    ];
+    // Tool names look like <verb>_<thing>; the verbs are those of the tools, plus ones a new tool would likely use.
+    const verbs = new Set([...[...tools].map((t) => t.split("_")[0]!), "create", "delete", "update", "list"]);
+    const toolName = new RegExp(`\\b(?:${[...verbs].join("|")})_[a-z_]+\\b`, "g");
+    let checked = 0;
     for (const file of files) {
       const text = read(file);
       // Inline code, fenced code blocks and indented code: where a command is shown, not prose.
@@ -147,12 +181,16 @@ describe("one spec for the API, the CLI and MCP", () => {
         for (const m of snippet.matchAll(/(?:^|[\s(|&;])dura ([a-z]+(?: [a-z]+)*)(?=$|[\s"'`)|&;\\])/g)) {
           const words = m[1]!;
           expect(commands.some((c) => words === c || words.startsWith(`${c} `)), `${file}: dura ${words}`).toBe(true);
+          checked++;
         }
       }
-      for (const m of text.matchAll(/\b(?:list|show|read|get|search|put|replace|append|set)_[a-z_]+\b/g)) {
+      for (const m of text.matchAll(toolName)) {
         expect(tools.has(m[0]), `${file}: ${m[0]}`).toBe(true);
+        checked++;
       }
     }
+    // The patterns still find what they look for.
+    expect(checked).toBeGreaterThan(100);
   });
 
   it("keeps the shared files free of imports, so the CLI bundle does not pull in server code", () => {

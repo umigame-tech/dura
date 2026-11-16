@@ -482,6 +482,9 @@ export type OperationId = keyof typeof OPERATIONS;
 
 export const operations = (): [OperationId, Operation][] => Object.entries(OPERATIONS) as [OperationId, Operation][];
 
+/** Whether an operation is about the journal summary (its errors get summary hints in the CLI and MCP). */
+export const isSummaryOperation = (op: Operation) => op.path.includes("/summary");
+
 /** The CLI flag of a param. */
 export const flagOf = (p: Param) => p.cli?.flag ?? p.name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
 

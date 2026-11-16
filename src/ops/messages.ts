@@ -14,6 +14,9 @@ const WRITTEN: Record<string, (json: any) => string> = {
   updateState: ({ state }) => `Status of ${state.id} is now ${state.status}.`,
 };
 
+/** The operations that have a one-line report (test/ops.test.ts checks that they exist). */
+export const WRITTEN_OPERATIONS = Object.keys(WRITTEN);
+
 /** The one-line report of a write, or undefined when the response is best shown as it is. */
 export function writtenMessage(operation: string, text: string): string | undefined {
   const message = WRITTEN[operation];

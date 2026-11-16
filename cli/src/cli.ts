@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 import { version } from "../package.json";
 import { versionFromEtag, writtenMessage } from "../../src/ops/messages";
-import { fillPath, flagOf, ifMatchHeader, isSummaryOperation, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "../../src/ops/spec";
+import { cliCommands, fillPath, flagOf, ifMatchHeader, isSummaryOperation, jsonBody, operations, queryString, type Operation, type OperationId, type Param } from "../../src/ops/spec";
 
 /** Everything the CLI touches outside itself, so tests can run it against an in-process app. */
 export interface Io {
@@ -157,25 +157,23 @@ interface Command {
 
 const labelOf = (p: Param) => p.cli?.label ?? `<${p.name}>`;
 
-const COMMANDS: Command[] = operations().flatMap(([id, op]): Command[] => {
-  if ("skip" in op.cli) return [];
-  const params = op.params.filter((p) => !p.cli?.skip);
-  const positionals = params.filter((p) => p.cli?.positional);
-  return [
-    {
+const COMMANDS: Command[] = operations().flatMap(([id, op]) =>
+  cliCommands(op).map((c): Command => {
+    const positionals = c.params.filter((p) => p.cli?.positional);
+    return {
       id,
       op,
-      name: op.cli.command,
-      words: op.cli.command.split(" "),
-      params,
+      name: c.command,
+      words: c.command.split(" "),
+      params: [...c.params],
       positionals,
-      flags: params.filter((p) => !p.cli?.positional && !p.cli?.state && !p.cli?.stdin),
-      stdin: params.find((p) => p.cli?.stdin),
-      usage: [op.cli.command, ...positionals.map(labelOf)].join(" "),
-      summary: op.cli.summary,
-    },
-  ];
-});
+      flags: c.params.filter((p) => !p.cli?.positional && !p.cli?.state && !p.cli?.stdin),
+      stdin: c.params.find((p) => p.cli?.stdin),
+      usage: [c.command, ...positionals.map(labelOf)].join(" "),
+      summary: c.summary,
+    };
+  }),
+);
 
 const GLOBAL_OPTIONS = {
   state: { type: "string", short: "s" },
@@ -188,12 +186,14 @@ const GLOBAL_OPTIONS = {
   "cli-version": { type: "boolean", short: "V" },
 } as const;
 
-type OptionSpec = { type: "string" | "boolean"; short?: string };
+type OptionSpec = { type: "string" | "boolean"; short?: string; multiple?: boolean };
 
 /** Every flag of every command. A flag that several commands share must have one type (test/ops.test.ts). */
 export const OPTIONS: Record<string, OptionSpec> = { ...GLOBAL_OPTIONS };
 for (const cmd of COMMANDS) {
-  for (const p of cmd.flags) OPTIONS[flagOf(p)] = { type: p.type === "boolean" ? "boolean" : "string" };
+  for (const p of cmd.flags) {
+    OPTIONS[flagOf(p)] = { type: p.type === "boolean" ? "boolean" : "string", ...(p.cli?.files ? { multiple: true } : {}) };
+  }
 }
 
 function optionHelp(): string {
@@ -373,8 +373,17 @@ export async function run(argv: string[], io: Io): Promise<number> {
         const raw = args[cmd.positionals.indexOf(p)];
         v = raw === undefined ? undefined : convert(p, raw);
       } else if (!p.cli?.stdin) {
-        const raw = opts[flagOf(p)];
-        v = typeof raw === "string" ? convert(p, raw) : raw;
+        const raw = opts[flagOf(p)] as string | boolean | string[] | undefined;
+        if (Array.isArray(raw)) {
+          // --section goal=goal.md --section plan=plan.md
+          const record: Record<string, string> = {};
+          for (const item of raw) {
+            const eq = item.indexOf("=");
+            if (eq <= 0) throw new CliError(`--${flagOf(p)} takes ${labelOf(p)} (got ${JSON.stringify(item)}).`);
+            record[item.slice(0, eq)] = await io.readFile(item.slice(eq + 1));
+          }
+          v = record;
+        } else v = typeof raw === "string" ? convert(p, raw) : raw;
       }
       if (v === undefined && p.cli?.stdin) v = await body();
       if (typeof v === "string" && p.omitBlank && !v.trim()) v = undefined;
@@ -401,7 +410,7 @@ export async function run(argv: string[], io: Io): Promise<number> {
     });
     const print = (text: string) => io.stdout(text.endsWith("\n") ? text : `${text}\n`);
     const output = opts.json ? undefined : OUTPUT[cmd.id];
-    const written = opts.json ? undefined : writtenMessage(cmd.id, res.text);
+    const written = opts.json ? undefined : writtenMessage(cmd.id, res.text, values);
     if (output) output(res, io, print);
     else if (written) io.stderr(`${written}\n`);
     else print(res.text);

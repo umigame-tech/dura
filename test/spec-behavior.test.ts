@@ -87,7 +87,7 @@ describe("CLI commands from the spec", () => {
       [["status", "active", "--file", "x.md"], "does not take --file"],
       [["show", "extra"], "Too many arguments"],
       [["section", "get"], "Missing <name>"],
-      [["section"], "Use `dura section get|put|replace`."],
+      [["section"], "Use `dura section get|put|replace|revisions`."],
       [["journal", "--after", "1", "--before", "2"], "Pass either --after or --before, not both."],
       [["list", "--status", "done"], "status must be one of"],
     ] as [string[], string][]) {

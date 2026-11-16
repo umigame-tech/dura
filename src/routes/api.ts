@@ -116,6 +116,18 @@ function searchMarkdown(
   return `${text}${reminder}`;
 }
 
+/** Every version, newest first, each under its own heading. */
+function revisionsMarkdown(
+  what: string,
+  revisions: { version: number; content: string; updatedBy: string; createdAt: string; coveredThroughSeq?: number }[],
+) {
+  const parts = revisions.map((r) => {
+    const covered = r.coveredThroughSeq !== undefined ? `, covers journal through #${r.coveredThroughSeq}` : "";
+    return `## Version ${r.version}${covered}\n\n<!-- by ${r.updatedBy} at ${r.createdAt} -->\n\n${r.content.trim() || "_(empty)_"}\n`;
+  });
+  return `# ${what}: ${revisions.length} version${revisions.length === 1 ? "" : "s"}, newest first\n\n${parts.join("\n")}`;
+}
+
 const str = (input: Input, key: string) => input[key] as string;
 const optStr = (input: Input, key: string) => input[key] as string | undefined;
 const optInt = (input: Input, key: string) => input[key] as number | undefined;
@@ -202,7 +214,9 @@ const handlers: Handlers = {
   },
 
   listSectionRevisions: async (c, input) => {
-    const revisions = await listRevisions(c.get("deps").db, str(input, "id"), str(input, "name"));
+    const name = str(input, "name");
+    const revisions = await listRevisions(c.get("deps").db, str(input, "id"), name);
+    if (wantsMarkdown(c)) return markdown(c, revisionsMarkdown(`Section ${name}`, revisions));
     return c.json({
       revisions: revisions.map((r) => ({
         version: r.version,
@@ -225,6 +239,7 @@ const handlers: Handlers = {
 
   listSummaryRevisions: async (c, input) => {
     const revisions = await listSummaryRevisions(c.get("deps").db, str(input, "id"));
+    if (wantsMarkdown(c)) return markdown(c, revisionsMarkdown("Journal summary", revisions));
     return c.json({
       revisions: revisions.map((r) => ({
         version: r.version,

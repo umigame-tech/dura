@@ -4,25 +4,9 @@ import { run, type Io } from "../cli/src/cli";
 import { guideMarkdown } from "../src/guide";
 import { declaredOnly, honoPath } from "../src/ops/http";
 import { WRITTEN_OPERATIONS } from "../src/ops/messages";
-import { argOf, flagOf, OPERATIONS, operations } from "../src/ops/spec";
+import { argOf, cliCommands, flagOf, mcpTools, OPERATIONS, operations } from "../src/ops/spec";
 import { api } from "../src/routes/api";
 import { setup } from "./helpers";
-
-/**
- * What the CLI or MCP does not offer yet. Every operation and parameter of the API should be
- * available from all three interfaces; the next step (journal #37) empties this list.
- */
-const KNOWN_GAPS = [
-  "guide: mcp",
-  "createState: cli",
-  "createState: mcp",
-  "listSectionRevisions: cli",
-  "listSectionRevisions: mcp",
-  "listSummaryRevisions: cli",
-  "listSummaryRevisions: mcp",
-  "updateState.title: cli",
-  "updateState.title: mcp",
-];
 
 const read = (path: string) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
 
@@ -33,34 +17,48 @@ describe("one spec for the API, the CLI and MCP", () => {
   });
 
   it("offers every operation and parameter in the CLI and MCP", () => {
-    const gaps: string[] = [];
+    // The API has nothing the CLI or MCP lacks (journal #37): every param is taken by some command and some tool.
     for (const [id, op] of operations()) {
-      if ("skip" in op.cli) gaps.push(`${id}: cli`);
-      if ("skip" in op.mcp) gaps.push(`${id}: mcp`);
-      for (const p of op.params) {
-        if (p.cli?.skip && !("skip" in op.cli)) gaps.push(`${id}.${p.name}: cli`);
-        if (p.mcp?.skip && !("skip" in op.mcp)) gaps.push(`${id}.${p.name}: mcp`);
+      for (const [where, views] of [
+        ["cli", cliCommands(op)],
+        ["mcp", mcpTools(op)],
+      ] as const) {
+        expect(views.length, `${id}: ${where}`).toBeGreaterThan(0);
+        for (const p of op.params) {
+          expect(views.some((v) => v.params.includes(p)), `${id}.${p.name}: ${where}`).toBe(true);
+        }
+        // Each command and tool can build the request: every path param and every required param.
+        for (const v of views) {
+          for (const p of op.params.filter((x) => x.in === "path" || (x.required && x.default === undefined))) {
+            expect(v.params, `${id} (${"command" in v ? v.command : v.tool}) takes ${p.name}`).toContain(p);
+          }
+        }
+        // A command or tool must not name a param the operation does not have.
+        for (const name of (Array.isArray(op[where]) ? op[where] : [op[where]]).flatMap((v: { params?: readonly string[] }) => v.params ?? [])) {
+          expect(op.params.map((p) => p.name), `${id}: ${where} param ${name}`).toContain(name);
+        }
       }
     }
-    expect(gaps).toEqual(KNOWN_GAPS);
   });
 
   it("gives every CLI flag one type and every tool and command a unique name", () => {
     const types = new Map<string, string>();
     for (const [id, op] of operations()) {
       for (const p of op.params) {
-        if (p.cli?.positional || p.cli?.state || p.cli?.stdin || p.cli?.skip) continue;
-        const type = p.type === "boolean" ? "boolean" : "string";
+        if (p.cli?.positional || p.cli?.state || p.cli?.stdin) continue;
+        const type = p.type === "boolean" ? "boolean" : p.cli?.files ? "string[]" : "string";
         expect(types.get(flagOf(p)) ?? type, `--${flagOf(p)} in ${id}`).toBe(type);
         types.set(flagOf(p), type);
       }
-      const args = op.params.filter((p) => !p.mcp?.skip).map(argOf);
-      expect(new Set(args).size, `arguments of ${id}`).toBe(args.length);
+      for (const tool of mcpTools(op)) {
+        const args = tool.params.map(argOf);
+        expect(new Set(args).size, `arguments of ${tool.tool}`).toBe(args.length);
+      }
     }
-    const tools = operations().flatMap(([, op]) => ("tool" in op.mcp ? [op.mcp.tool] : []));
+    const tools = operations().flatMap(([, op]) => mcpTools(op).map((t) => t.tool));
     expect(new Set(tools).size).toBe(tools.length);
     const commands = operations().flatMap(([, op]) =>
-      "command" in op.cli ? [`${op.cli.command} ${op.params.filter((p) => p.cli?.positional).length}`] : [],
+      cliCommands(op).map((c) => `${c.command} ${c.params.filter((p) => p.cli?.positional).length}`),
     );
     expect(new Set(commands).size).toBe(commands.length);
   });
@@ -78,10 +76,10 @@ describe("one spec for the API, the CLI and MCP", () => {
       result.tools.map((t: { name: string }) => [t.name, t]),
     );
     for (const [, op] of operations()) {
-      if (!("tool" in op.mcp)) continue;
-      const tool = listed.get(op.mcp.tool);
-      expect(tool, op.mcp.tool).toBeDefined();
-      expect(Object.keys(tool!.inputSchema.properties).sort()).toEqual(op.params.filter((p) => !p.mcp?.skip).map(argOf).sort());
+      for (const tool of mcpTools(op)) {
+        expect(listed.get(tool.tool), tool.tool).toBeDefined();
+        expect(Object.keys(listed.get(tool.tool)!.inputSchema.properties).sort()).toEqual(tool.params.map(argOf).sort());
+      }
     }
   });
 
@@ -97,16 +95,17 @@ describe("one spec for the API, the CLI and MCP", () => {
     };
     expect(await run(["--help"], io)).toBe(0);
     for (const [, op] of operations()) {
-      if (!("command" in op.cli)) continue;
-      expect(help).toMatch(new RegExp(`^  ${op.cli.command}( <| \\[| {2,})`, "m"));
-      for (const p of op.params) {
-        if (p.cli?.positional || p.cli?.state || p.cli?.stdin || p.cli?.skip) continue;
-        // The line of the flag names the commands that take it.
-        const line = help.split("\n").find((l) => l.trimStart().startsWith(`--${flagOf(p)} `) || l.trim() === `--${flagOf(p)}`);
-        expect(line, `--${flagOf(p)}`).toBeDefined();
-        expect(line!.replace(/^\s*--\S+( <[^>]+>)?\s+/, ""), `--${flagOf(p)} for ${op.cli.command}`).toMatch(
-          new RegExp(`(^|; |/ )${op.cli.command}( /|:)`),
-        );
+      for (const cmd of cliCommands(op)) {
+        expect(help).toMatch(new RegExp(`^  ${cmd.command}( <| \\[| {2,})`, "m"));
+        for (const p of cmd.params) {
+          if (p.cli?.positional || p.cli?.state || p.cli?.stdin) continue;
+          // The line of the flag names the commands that take it.
+          const line = help.split("\n").find((l) => l.trimStart().startsWith(`--${flagOf(p)} `) || l.trim() === `--${flagOf(p)}`);
+          expect(line, `--${flagOf(p)}`).toBeDefined();
+          expect(line!.replace(/^\s*--\S+( <\S+>)?\s+/, ""), `--${flagOf(p)} for ${cmd.command}`).toMatch(
+            new RegExp(`(^|; |/ )${cmd.command}( /|:)`),
+          );
+        }
       }
     }
   });
@@ -116,13 +115,13 @@ describe("one spec for the API, the CLI and MCP", () => {
     const docs = { readme: read("README.md"), cli: read("cli/README.md"), skill: read(".agents/skills/dura/SKILL.md") };
     for (const [, op] of operations()) {
       expect(guide, op.path).toContain(`/api${op.path}`);
-      if ("tool" in op.mcp) {
-        expect(guide).toContain(`\`${op.mcp.tool}\``);
-        expect(docs.readme, `README.md: ${op.mcp.tool}`).toContain(op.mcp.tool);
-        expect(docs.skill, `SKILL.md: ${op.mcp.tool}`).toContain(op.mcp.tool);
+      for (const { tool } of mcpTools(op)) {
+        expect(guide).toContain(`\`${tool}\``);
+        expect(docs.readme, `README.md: ${tool}`).toContain(tool);
+        expect(docs.skill, `SKILL.md: ${tool}`).toContain(tool);
       }
-      if ("command" in op.cli) {
-        for (const [name, text] of Object.entries(docs)) expect(text, `${name}: dura ${op.cli.command}`).toContain(`dura ${op.cli.command}`);
+      for (const { command } of cliCommands(op)) {
+        for (const [name, text] of Object.entries(docs)) expect(text, `${name}: dura ${command}`).toContain(`dura ${command}`);
       }
     }
   });
@@ -152,8 +151,8 @@ describe("one spec for the API, the CLI and MCP", () => {
   });
 
   it("names only commands and tools that exist, in the docs, hints and instructions", () => {
-    const commands = operations().flatMap(([, op]) => ("command" in op.cli ? [op.cli.command] : []));
-    const tools = new Set(operations().flatMap(([, op]) => ("tool" in op.mcp ? [op.mcp.tool] : [])));
+    const commands = operations().flatMap(([, op]) => cliCommands(op).map((c) => c.command));
+    const tools = new Set(operations().flatMap(([, op]) => mcpTools(op).map((t) => t.tool)));
     const files = [
       "README.md",
       "cli/README.md",

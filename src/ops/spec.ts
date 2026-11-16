@@ -31,8 +31,8 @@ export interface CliParam {
   readonly help?: string;
   /** Overrides `required` for the CLI. */
   readonly required?: boolean;
-  /** Not offered by the CLI yet, with the reason. */
-  readonly skip?: string;
+  /** A record flag: repeatable `--flag name=<file>`, each file read into the record. */
+  readonly files?: true;
 }
 
 export interface McpParam {
@@ -40,8 +40,6 @@ export interface McpParam {
   readonly name?: string;
   /** Overrides `required` for MCP. */
   readonly required?: boolean;
-  /** Not offered by MCP yet, with the reason. */
-  readonly skip?: string;
 }
 
 export interface Param {
@@ -87,9 +85,37 @@ export interface Operation {
   readonly anyOf?: readonly string[];
   /** The server's message when none of `anyOf` is given. */
   readonly anyOfMessage?: string;
-  readonly cli: { readonly command: string; readonly summary: string } | { readonly skip: string };
-  readonly mcp: { readonly tool: string; readonly description: string } | { readonly skip: string };
+  /**
+   * How the CLI and MCP offer the operation: one command and one tool, or several that each take some
+   * of the params (e.g. PATCH /states/:id as `dura status` and `dura title`). Together they take every param.
+   */
+  readonly cli: CliCommand | readonly CliCommand[];
+  readonly mcp: McpTool | readonly McpTool[];
 }
+
+export interface CliCommand {
+  readonly command: string;
+  readonly summary: string;
+  /** The params this command takes (default: all). */
+  readonly params?: readonly string[];
+}
+
+export interface McpTool {
+  readonly tool: string;
+  readonly description: string;
+  /** The params this tool takes (default: all). */
+  readonly params?: readonly string[];
+}
+
+const list = <T extends object>(v: T | readonly T[]): readonly T[] => (Array.isArray(v) ? (v as readonly T[]) : [v as T]);
+
+/** The CLI commands of an operation, each with its params. */
+export const cliCommands = (op: Operation) =>
+  list(op.cli).map((c) => ({ ...c, params: op.params.filter((p) => !c.params || c.params.includes(p.name)) }));
+
+/** The MCP tools of an operation, each with its params. */
+export const mcpTools = (op: Operation) =>
+  list(op.mcp).map((t) => ({ ...t, params: op.params.filter((p) => !t.params || t.params.includes(p.name)) }));
 
 const stateId = {
   name: "id",
@@ -173,7 +199,10 @@ export const OPERATIONS = {
     doc: "this document",
     params: [],
     cli: { command: "guide", summary: "Print the usage guide served by the server (no token needed)" },
-    mcp: { skip: "Added in the next step (journal #37)." },
+    mcp: {
+      tool: "get_guide",
+      description: "Read the usage guide served by this dura server: the model, the reading procedure, the CLI, the REST API and every endpoint.",
+    },
   },
   listStates: {
     method: "GET",
@@ -202,14 +231,38 @@ export const OPERATIONS = {
     markdown: "no",
     doc: "create a state",
     params: [
-      { name: "id", type: "string", in: "body", description: "State id (default: generated)" },
-      { name: "title", type: "string", in: "body", required: true, description: "Title" },
-      { ...status, description: "Initial status (default: active)" },
-      { name: "statusNote", type: "string", in: "body", nullable: true, description: "Status note" },
-      { name: "sections", type: "record", in: "body", description: "Initial sections: name to Markdown" },
+      {
+        name: "id",
+        type: "string",
+        in: "body",
+        description: "State id: lowercase letters, digits, - and _ (default: made from the title)",
+        cli: { label: "<id>", help: "the new state id (default: made from the title)" },
+      },
+      { name: "title", type: "string", in: "body", required: true, description: "Title", cli: { label: "<text>", help: "the title" } },
+      { ...status, description: "Initial status (default: active)", cli: { label: "<status>", help: "the initial status (default: active)" } },
+      {
+        name: "statusNote",
+        type: "string",
+        in: "body",
+        nullable: true,
+        description: "Status note",
+        cli: { flag: "note", label: "<text>", help: "the status note" },
+        mcp: { name: "note" },
+      },
+      {
+        name: "sections",
+        type: "record",
+        in: "body",
+        description: "Initial sections: section name to Markdown, e.g. {\"goal\": \"...\"}",
+        cli: { flag: "section", files: true, label: "<name>=<file>", help: "an initial section read from a file (repeatable)" },
+      },
     ],
-    cli: { skip: "Added in the next step (journal #37)." },
-    mcp: { skip: "Added in the next step (journal #37)." },
+    cli: { command: "create", summary: "Create a state (--title, optionally --id, --status, --note, --section)" },
+    mcp: {
+      tool: "create_state",
+      description:
+        "Create a state with a title and, optionally, an id, status, status note and initial sections (e.g. goal). Ask the user before creating one.",
+    },
   },
   showState: {
     method: "GET",
@@ -346,11 +399,14 @@ export const OPERATIONS = {
     method: "GET",
     path: "/states/:id/sections/:name/revisions",
     auth: "read",
-    markdown: "no",
-    doc: "every version of a section",
+    markdown: "yes",
+    doc: "every version of a section, newest first",
     params: [stateId, sectionName],
-    cli: { skip: "Added in the next step (journal #37)." },
-    mcp: { skip: "Added in the next step (journal #37)." },
+    cli: { command: "section revisions", summary: "Print every version of a section, newest first" },
+    mcp: {
+      tool: "list_section_revisions",
+      description: "Read every version of a section, newest first, with who wrote each and when. Use it to see what changed or to recover dropped text.",
+    },
   },
   getSummary: {
     method: "GET",
@@ -403,11 +459,14 @@ export const OPERATIONS = {
     method: "GET",
     path: "/states/:id/summary/revisions",
     auth: "read",
-    markdown: "no",
-    doc: "every version of the summary",
+    markdown: "yes",
+    doc: "every version of the summary, newest first",
     params: [stateId],
-    cli: { skip: "Added in the next step (journal #37)." },
-    mcp: { skip: "Added in the next step (journal #37)." },
+    cli: { command: "summary revisions", summary: "Print every version of the journal summary, newest first" },
+    mcp: {
+      tool: "list_summary_revisions",
+      description: "Read every version of the journal summary, newest first, each with the journal seq it covered through.",
+    },
   },
   appendJournal: {
     method: "POST",
@@ -456,8 +515,8 @@ export const OPERATIONS = {
         type: "string",
         in: "body",
         description: "New title",
-        cli: { skip: "Added in the next step (journal #37)." },
-        mcp: { skip: "Added in the next step (journal #37)." },
+        cli: { positional: true, required: true, label: "<title>" },
+        mcp: { required: true },
       },
       { ...status, cli: { positional: true, required: true, label: "<status>" }, mcp: { required: true } },
       {
@@ -470,11 +529,18 @@ export const OPERATIONS = {
         mcp: { name: "note" },
       },
     ],
-    cli: { command: "status", summary: `Set the status: ${STATUSES.join(" | ")}` },
-    mcp: {
-      tool: "set_status",
-      description: "Set the status. waiting (with the question for the human in `note`) and completed (with a summary) notify the human.",
-    },
+    cli: [
+      { command: "status", summary: `Set the status: ${STATUSES.join(" | ")}`, params: ["id", "status", "statusNote"] },
+      { command: "title", summary: "Change the title of the state", params: ["id", "title"] },
+    ],
+    mcp: [
+      {
+        tool: "set_status",
+        description: "Set the status. waiting (with the question for the human in `note`) and completed (with a summary) notify the human.",
+        params: ["id", "status", "statusNote"],
+      },
+      { tool: "set_title", description: "Change the title of the state.", params: ["id", "title"] },
+    ],
   },
 } as const satisfies Record<string, Operation>;
 

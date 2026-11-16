@@ -40,7 +40,9 @@ describe("mcp", () => {
 
     const { result } = await rpc("tools/list");
     expect(result.tools.map((t: { name: string }) => t.name)).toEqual([
+      "get_guide",
       "list_states",
+      "create_state",
       "show_state",
       "read_journal",
       "get_journal_entry",
@@ -48,10 +50,13 @@ describe("mcp", () => {
       "get_section",
       "put_section",
       "replace_in_section",
+      "list_section_revisions",
       "get_summary",
       "put_summary",
+      "list_summary_revisions",
       "append_journal",
       "set_status",
+      "set_title",
     ]);
 
     expect((await rpc("nope")).error.code).toBe(-32601);

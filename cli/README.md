@@ -31,6 +31,10 @@ dura search SQLite --kind decision          Search the journal, newest first (ev
 dura summary get                            Journal summary to stdout, its version and covered seq to stderr
 dura summary put --covered 41 --version 3 < summary.md  Write the summary (omit --version to create it)
 dura status waiting --note "Which name?"
+dura title "Rewrite search (phase 2)"       Change the title of the state
+dura create --id search --title "Rewrite search" --section goal=goal.md  Create a state (--section repeats)
+dura section revisions tasks                Every version of a section, newest first
+dura summary revisions                      Every version of the summary, newest first
 dura guide                                  Print /api/guide
 ```
 

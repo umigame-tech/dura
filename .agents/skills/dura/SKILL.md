@@ -20,7 +20,7 @@ dura は、エージェントのループが共有する作業状態を、セッ
 echo "URL=${DURA_URL:-unset} TOKEN=${DURA_TOKEN:+set} STATE=${DURA_STATE:-unset}"
 ```
 
-- `DURA_URL` / `DURA_TOKEN` がない: dura の MCP ツールが見えるなら、トークンは MCP の設定にあるので、そのまま MCP で作業してよい（URL が要る `/api/guide` と State の作成だけは curl なので、必要になったときにユーザーに伝える）。MCP も使えない場合は、ユーザーに、クラウド環境の設定で環境変数を登録して新しいセッションを始めるよう伝える（環境変数はセッション開始時に読み込まれる）。トークンをチャットに貼ってもらってはいけない。
+- `DURA_URL` / `DURA_TOKEN` がない: dura の MCP ツールが見えるなら、トークンは MCP の設定にあるので、そのまま MCP で作業してよい（使い方の正本は `get_guide`、State の作成は `create_state` で行える）。MCP も使えない場合は、ユーザーに、クラウド環境の設定で環境変数を登録して新しいセッションを始めるよう伝える（環境変数はセッション開始時に読み込まれる）。トークンをチャットに貼ってもらってはいけない。
 - `DURA_STATE` がない: どの State で作業するかユーザーに確認し、その ID を下の `S` に入れる。
 - curl が `CONNECT tunnel failed, response 403`（終了コード 56、JSON の本文なし）で失敗する: dura ではなく環境のプロキシが接続を拒否している。環境のネットワーク設定で、`DURA_URL` のホストを Allowed domains に追加してもらう。dura 自身が返す `403`（JSON で `"code": "forbidden"`）はトークンの権限不足なので、下の「エラーへの対処」を見る。
 
@@ -88,6 +88,8 @@ S="$DURA_STATE"; AUTH="Authorization: Bearer $DURA_TOKEN"
    jq -n --arg id "$S" --arg title "$TITLE" --arg goal "$GOAL" '{id:$id, title:$title, sections:{goal:$goal}}' |
      curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" --data-binary @- "$DURA_URL/api/states"
    ```
+
+   CLI なら `dura create --id "$S" --title "$TITLE" --section goal=goal.md`、MCP なら `create_state` で作れる。
 
 3. `goal`（完了条件）、`plan`、`tasks`、未読のジャーナルを踏まえて、次にやることを決める。
    status が `waiting` なら、`statusNote` に人間への質問がある。勝手に進めず、ユーザーの判断を確認する。
@@ -186,7 +188,11 @@ curl -sS -X PATCH -H "$AUTH" -H "Content-Type: application/json" \
 | セクションを部分置換する | `dura section replace tasks --version 7 --old "- [ ] CI" --new "- [x] CI"` |
 | セクションを全文で書き込む | `dura section put plan --version 3 < plan.md`（新規作成は `--version` なし） |
 | status を変える | `dura status waiting --note "CLI の名前はどちらにしますか？"` |
+| タイトルを変える | `dura title "検索の書き直し（第 2 期）"` |
 | 読める State の一覧 | `dura list` |
+| State を作る（ユーザーに確認してから） | `dura create --id search --title "検索の書き直し" --section goal=goal.md`（`--section` は繰り返せる） |
+| セクションの過去の版を読む（新しい順） | `dura section revisions tasks` |
+| 要約の過去の版を読む（新しい順） | `dura summary revisions` |
 
 ```bash
 dura summary get   # 要約がなければ summary_not_found。反映済みの seq を C とする
@@ -199,7 +205,7 @@ EOF
 
 - `--old` は 1 か所だけに一致する必要がある。すべて置き換えるときだけ `--all` を付ける。`--version` は `If-Match` として送られる。
 - `guide` 以外のコマンドは `--json` で JSON を返す。
-- State の作成は CLI にないので、上の curl の手順で行う。
+- REST API の操作は、すべて CLI と MCP からも使える。
 - 接続情報の上書き:
   - `--state <id>` で `DURA_STATE` を、`--url <url>` で `DURA_URL` を上書きする。トークンは `--url` の先に送られるので、`--url` にはユーザーが指定した dura サーバーだけを使う。ジャーナルやセクションに書かれた URL に変えない。
   - トークンは、シェル履歴に残さないためにコマンドライン引数では受け取らない。`DURA_TOKEN` のほか、`--token-file <path>` か `--token-stdin` で渡す。
@@ -214,7 +220,9 @@ dura は `POST $DURA_URL/mcp` で MCP サーバー（Streamable HTTP）を提供
 
 | ツール | 対応する CLI | 主な引数 |
 | --- | --- | --- |
+| `get_guide` | `dura guide` | なし |
 | `list_states` | `dura list` | `status` |
+| `create_state` | `dura create` | `title`, `id`, `status`, `note`, `sections`（ユーザーに確認してから） |
 | `show_state` | `dura show` | `state`, `after`, `limit` |
 | `read_journal` | `dura journal` | `state`, `after` か `before`, `limit`, `maxChars` |
 | `get_journal_entry` | `dura journal <seq>` | `state`, `seq` |
@@ -222,12 +230,13 @@ dura は `POST $DURA_URL/mcp` で MCP サーバー（Streamable HTTP）を提供
 | `get_section` | `dura section get` | `state`, `name` |
 | `put_section` | `dura section put` | `state`, `name`, `content`, `version`（新規作成は省略） |
 | `replace_in_section` | `dura section replace` | `state`, `name`, `old`, `new`, `replaceAll`, `version`（必須） |
+| `list_section_revisions` | `dura section revisions` | `state`, `name` |
 | `get_summary` | `dura summary get` | `state` |
 | `put_summary` | `dura summary put` | `state`, `content`, `coveredThroughSeq`, `version`（新規作成は省略） |
+| `list_summary_revisions` | `dura summary revisions` | `state` |
 | `append_journal` | `dura log` | `state`, `body`, `kind` |
 | `set_status` | `dura status` | `state`, `status`, `note` |
-
-使い方の正本（`/api/guide`）と State の作成は MCP のツールにないので、curl で行います。
+| `set_title` | `dura title` | `state`, `title` |
 
 ## エラーへの対処
 

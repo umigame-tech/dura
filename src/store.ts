@@ -440,6 +440,20 @@ function openFence(text: string): string | undefined {
 }
 
 /** One journal entry as Markdown. With maxChars, a longer body is cut and the cut is stated with where to read it all. */
+/**
+ * The end of a forward (after) page: the seq to continue from, and whether newer entries remain unread.
+ * Without latestSeq the page cannot tell, so it only gives the seq.
+ */
+export function journalFooter(last: number, latestSeq?: number): string {
+  if (latestSeq !== undefined && latestSeq > last) {
+    return (
+      `Last journal seq: ${last}. Entries after #${last} (through #${latestSeq}) are not shown and have not been read. ` +
+      `Continue with after=${last}.`
+    );
+  }
+  return `Last journal seq: ${last}.${latestSeq === undefined ? "" : " No newer entries."} Entries appended later come after=${last}.`;
+}
+
 export function journalEntryMarkdown(stateId: string, e: JournalEntry, maxChars?: number): string {
   // Counted on the stored body, like the JSON response, so both report the same totalChars.
   const x = excerpt(e.body, maxChars);
@@ -634,6 +648,7 @@ export function renderStateMarkdown(
   after: number,
   summary?: JournalSummary,
   maxChars?: number,
+  latestSeq?: number,
 ): string {
   const lines: string[] = [];
   lines.push(`# ${state.title}`, "");
@@ -668,6 +683,6 @@ export function renderStateMarkdown(
   if (journal.length === 0) lines.push("_No entries._", "");
   for (const e of journal) lines.push(journalEntryMarkdown(state.id, e, maxChars), "");
   const last = journal.at(-1)?.seq ?? after;
-  lines.push("---", "", `Last journal seq: ${last}. Next time, read only newer entries with after=${last}.`, "");
+  lines.push("---", "", journalFooter(last, latestSeq), "");
   return lines.join("\n");
 }

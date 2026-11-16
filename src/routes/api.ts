@@ -17,6 +17,7 @@ import {
   getJournalEntry,
   getSummary,
   journalEntryMarkdown,
+  journalFooter,
   lastJournalSeq,
   listJournal,
   listJournalBefore,
@@ -71,7 +72,7 @@ function journalJson(e: JournalEntry, maxChars?: number) {
 function journalMarkdown(
   stateId: string,
   entries: JournalEntry[],
-  page: { after: number } | { before: number; olderBefore: number | null; latestSeq: number },
+  page: { after: number; latestSeq: number } | { before: number; olderBefore: number | null; latestSeq: number },
   maxChars?: number,
 ) {
   if (entries.length === 0) {
@@ -79,6 +80,8 @@ function journalMarkdown(
   }
   const parts = entries.map((e) => `${journalEntryMarkdown(stateId, e, maxChars)}\n`);
   const last = entries.at(-1)!.seq;
+  // A full forward page leaves newer entries unread: say so, so the page is not taken as the end.
+  if ("after" in page) return `${parts.join("\n")}\n---\n\n${journalFooter(last, page.latestSeq)}\n`;
   let text = `${parts.join("\n")}\n---\n\nLast journal seq: ${last}.\n`;
   if ("before" in page && page.latestSeq > last) {
     // Paging backwards from an older seq: say that newer entries exist, so "last" is not taken as the latest.
@@ -177,17 +180,21 @@ const handlers: Handlers = {
     const after = optInt(input, "after") ?? 0;
     const maxChars = optInt(input, "maxChars");
     const state = await getState(db, id);
-    const [sections, summary, journal] = await Promise.all([
+    const [sections, summary, journal, latestSeq] = await Promise.all([
       listSections(db, id),
       findSummary(db, id),
       listJournal(db, id, { after, limit: optInt(input, "limit") }),
+      lastJournalSeq(db, id),
     ]);
-    if (wantsMarkdown(c)) return markdown(c, renderStateMarkdown(state, sections, journal, after, summary, maxChars));
+    if (wantsMarkdown(c)) {
+      return markdown(c, renderStateMarkdown(state, sections, journal, after, summary, maxChars, latestSeq));
+    }
     return c.json({
       state,
       summary: summary ? summaryJson(summary) : null,
       sections: sections.map(sectionJson),
       journal: journal.map((e) => journalJson(e, maxChars)),
+      latestSeq,
     });
   },
 
@@ -291,9 +298,9 @@ const handlers: Handlers = {
       if (wantsMarkdown(c)) return markdown(c, journalMarkdown(id, entries, { before, olderBefore, latestSeq }, maxChars));
       return c.json({ entries: entries.map((e) => journalJson(e, maxChars)), olderBefore, latestSeq });
     }
-    const entries = await listJournal(db, id, { after: after ?? 0, limit });
-    if (wantsMarkdown(c)) return markdown(c, journalMarkdown(id, entries, { after: after ?? 0 }, maxChars));
-    return c.json({ entries: entries.map((e) => journalJson(e, maxChars)) });
+    const [entries, latestSeq] = await Promise.all([listJournal(db, id, { after: after ?? 0, limit }), lastJournalSeq(db, id)]);
+    if (wantsMarkdown(c)) return markdown(c, journalMarkdown(id, entries, { after: after ?? 0, latestSeq }, maxChars));
+    return c.json({ entries: entries.map((e) => journalJson(e, maxChars)), latestSeq });
   },
 
   searchJournal: async (c, input) => {

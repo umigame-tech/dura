@@ -13,6 +13,7 @@ import {
   findState,
   findSummary,
   getJournalEntry,
+  lastJournalSeq,
   listJournal,
   listJournalBefore,
   putSection,
@@ -159,4 +160,22 @@ describe("atomic writes on D1", () => {
     expect(await count("journal_summary_revisions", "m")).toBe(1);
     expect((await findSummary(db, "m"))?.version).toBe(1);
   });
+  it("resumes a long journal page by page from the summary", async () => {
+    await createState(db, { id: "resume", title: "R" }, "me");
+    for (let i = 1; i <= 60; i++) await appendJournal(db, "resume", "me", "report", `e${i}`);
+    const seqs = (entries: { seq: number }[]) => [entries[0]?.seq, entries.at(-1)?.seq, entries.length];
+
+    // No summary: read from 0, a page at a time, and keep the progress in the summary.
+    expect(await findSummary(db, "resume")).toBeUndefined();
+    expect(seqs(await listJournal(db, "resume", { after: 0, limit: 25 }))).toEqual([1, 25, 25]);
+    expect(await lastJournalSeq(db, "resume")).toBe(60);
+    await putSummary(db, "resume", { content: "through 25", coveredThroughSeq: 25 }, null, "me");
+
+    // The next session starts from the summary and reads only what follows it.
+    const c = (await findSummary(db, "resume"))!.coveredThroughSeq;
+    expect(seqs(await listJournal(db, "resume", { after: c, limit: 25 }))).toEqual([26, 50, 25]);
+    await putSummary(db, "resume", { content: "through 50", coveredThroughSeq: 50 }, 1, "me");
+    await appendJournal(db, "resume", "me", "report", "late");
+    expect(seqs(await listJournal(db, "resume", { after: 50, limit: 25 }))).toEqual([51, 61, 11]);
+  }, 30_000);
 });

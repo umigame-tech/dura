@@ -4,7 +4,7 @@ import { publicOrigin, resolveActor } from "./auth";
 import type { AppEnv } from "./env";
 import { ApiError } from "./lib/errors";
 import { versionFromEtag, writtenMessage } from "./ops/messages";
-import { argOf, fillPath, hasType, ifMatchHeader, isSummaryOperation, jsonBody, mcpTools, operations, queryString, typeName, type Operation, type OperationId, type Param } from "./ops/spec";
+import { argOf, fillPath, hasType, ifMatchHeader, isSummaryOperation, jsonBody, mcpTools, operations, queryString, RESUME, typeName, type Operation, type OperationId, type Param } from "./ops/spec";
 
 /**
  * MCP (Streamable HTTP) adapter. Stateless and JSON-only: every tool call is translated into a
@@ -17,14 +17,16 @@ const PROTOCOL_VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 const INSTRUCTIONS = `dura keeps the state of a long-running task outside of any single agent session.
 A state has overwritable, versioned Markdown sections (goal, plan, design, tasks...) and an append-only journal.
 
-Before choosing work, call get_summary. If the state has a journal summary, it covers the journal through a seq: call show_state with after=<that seq> to read the goal, plan, tasks and only the newer entries. Without a summary (summary_not_found), call show_state with after=0 and read the whole journal.
-If a page holds as many journal entries as the limit, continue with read_journal from the last seq shown.
+Before choosing work, call get_summary. Its coveredThroughSeq C (0 if summary_not_found) is where the unread journal starts: the summary stands in for the entries up to C.
+Call show_state with after=C, limit=${RESUME.page}, maxChars=${RESUME.maxChars} to read the goal, plan, tasks and the first page after C. While a page ends by saying newer entries "are not shown and have not been read", continue with read_journal from the last seq shown. Read every entry after C before choosing work.
+Start a new session from the summary's C, not from a seq remembered from an earlier session.
+If there are many unread entries or no summary yet, update the summary with put_summary after each page (coveredThroughSeq = the last seq of that page), so an interrupted session loses nothing. Before covering an entry cut by maxChars, read it whole with get_journal_entry when the rest may matter.
 To find a past decision or report, call search_journal (it does not replace reading the unread entries).
 If the status is waiting, the status note is a question for the human: get their decision before resuming.
 If the state does not exist (not_found), confirm its title and goal with the user, then call create_state. get_guide returns the full usage guide.
 
 Report each milestone with append_journal (kind report): what changed, the result, links, the next step.
-When the journal has grown, update the summary with put_summary (coveredThroughSeq = the last seq you reflected).
+When about ${RESUME.summaryAfter} entries have accumulated after the summary, update it with put_summary (coveredThroughSeq = the last seq you read and reflected, never newer).
 Edit sections with replace_in_section rather than rewriting them, passing the version you read.
 On version_conflict, read the section again, re-apply your change and retry with the new version.
 Set the status to waiting with a concrete question when you need a human decision, and to completed with a summary when every goal criterion is met; both notify the human.

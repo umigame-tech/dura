@@ -11,6 +11,12 @@ export const STATUSES = ["active", "waiting", "completed", "abandoned"] as const
 /** Page sizes of the journal. The store applies them; the spec tells clients. */
 export const JOURNAL_LIMIT = { default: 200, max: 1000 } as const;
 export const SEARCH_LIMIT = { default: 20, max: 100 } as const;
+/**
+ * The resume procedure the guide, the MCP instructions and the CLI hints describe: read the entries after the
+ * summary in pages of RESUME.page entries with bodies cut at RESUME.maxChars, and update the summary when about
+ * RESUME.summaryAfter entries have accumulated after it.
+ */
+export const RESUME = { page: 100, maxChars: 2000, summaryAfter: 20 } as const;
 
 export type ParamType = "string" | "integer" | "boolean" | "record";
 
